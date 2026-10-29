@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Shadow</title></head>
+<body>
+  <star-card id="card"></star-card>
+  <secret-box id="closed"></secret-box>
+  <p id="out"></p>
+  <script>
+    const out = t => document.getElementById('out').textContent = t;
+    customElements.define('star-button', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({mode: 'open'}).innerHTML = '<button id="star">Star</button>';
+        this.shadowRoot.getElementById('star').onclick = () => out('starred');
+      }
+    });
+    customElements.define('star-card', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({mode: 'open'}).innerHTML =
+          '<input id="q" placeholder="Search"><star-button></star-button>';
+        this.shadowRoot.getElementById('q').addEventListener('input', e => out('q:' + e.target.value));
+      }
+    });
+    customElements.define('secret-box', class extends HTMLElement {
+      constructor() {
+        super();
+        const root = this.attachShadow({mode: 'closed'});
+        root.innerHTML = '<button style="width: 120px; height: 40px">Hidden</button>';
+        root.querySelector('button').onclick = () => out('closed clicked');
+      }
+    });
+  </script>
+</body>
+</html>

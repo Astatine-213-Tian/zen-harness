@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Scroll</title></head>
+<body>
+  <div id="pane" style="height: 150px; width: 300px; overflow: auto; border: 1px solid">
+    <div style="height: 1000px">tall content</div>
+  </div>
+  <ul id="feed"></ul>
+  <p id="sentinel">loading…</p>
+  <script>
+    // Infinite feed: 20 more rows whenever the sentinel comes into view, up to 100.
+    const feed = document.getElementById('feed');
+    let n = 0;
+    function more() {
+      for (let i = 0; i < 20; i++) feed.insertAdjacentHTML('beforeend', `<li style="height: 40px">row ${++n}</li>`);
+      if (n >= 100) document.getElementById('sentinel').textContent = 'end';
+    }
+    more();
+    new IntersectionObserver(es => { if (es[0].isIntersecting && n < 100) setTimeout(more, 100); })
+      .observe(document.getElementById('sentinel'));
+    window.__frames = 0;
+    (function tick() { window.__frames++; requestAnimationFrame(tick); })();
+  </script>
+</body>
+</html>
