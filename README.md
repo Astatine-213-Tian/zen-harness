@@ -1,28 +1,42 @@
-# zen-harness
+# zen-harness: let AI agents use your Zen browser
 
-Let a coding agent (Claude Code, Codex, …) drive your real **Zen** browser: your tabs, your logins, whichever profile you choose. Agents send short Python snippets; helpers are pre-imported; a background daemon keeps the browser session open (~70 ms per call once warm).
+**Give Claude Code, Codex or any coding agent hands in the [Zen browser](https://zen-browser.app) you already use: open tabs, click, type, fill forms and read pages, while you stay signed in to everything.**
 
-It follows the design of [browser-harness](https://github.com/browser-use/browser-harness) but is a separate, from-scratch package. Zen is Firefox-based and has no Chrome DevTools Protocol, so zen-harness speaks **WebDriver BiDi**.
+No separate test browser, no re-logging in, no API keys for each site. The agent runs short Python snippets against your real Zen (Firefox-based), in background tabs, and leaves your own tabs alone. It is fast (~70 ms per call) and cheap on tokens: a whole GitHub page comes back as about 100 lines.
+
+If you know [browser-harness](https://github.com/browser-use/browser-harness): this is **browser-harness for Zen and Firefox**. Same working style and helper names, rebuilt from scratch on WebDriver BiDi, because Firefox-based browsers don't speak Chrome's DevTools Protocol.
 
 ```bash
 zen-harness <<'PY'
-new_tab("https://www.expedia.ca/Flights")
+new_tab("https://github.com/VibiumDev/vibium")
 wait_for_load()
-print(page_info())
+print(snapshot("star"))      # @e1 button "Star VibiumDev/vibium"
+click("@e1")                 # starred, with your own GitHub login
 PY
 ```
 
+## What you can use it for
+
+- "Search Expedia for flights from Toronto to Tokyo next month and list the three cheapest."
+- "Star the repos in this list on GitHub."
+- "Open my dashboard and tell me which jobs failed overnight."
+- Testing your own web app in the browser where you're already logged in.
+
 ## Install
 
+Requires macOS, [Zen](https://zen-browser.app), Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+
 ```bash
-uv tool install --editable ~/Developer/zen-harness
+uv tool install git+https://github.com/Astatine-213-Tian/zen-harness
 ```
 
-To give Claude Code the skill:
+Give Claude Code the skill, so it knows when and how to use it:
 
 ```bash
 mkdir -p ~/.claude/skills/zen-harness && zen-harness skill > ~/.claude/skills/zen-harness/SKILL.md
 ```
+
+Then ask your agent for a browser task. The first call connects to Zen (see [How it connects](#how-it-connects)).
 
 ## How it connects
 
@@ -79,6 +93,27 @@ tab_marker = "🐴"             # prefix on the controlled tab's title; "" to di
 - **Force-killing the daemon locks Zen.** Firefox keeps a BiDi session open after its client disappears and can't hand it to a new one. The daemon ends the session on errors, idle timeout and SIGTERM/SIGINT/SIGHUP; after a `kill -9`, run `zen-harness relaunch`.
 - **Background tabs.** Agents work in background tabs. Clicks, typing and JS work there; wheel scrolling falls back to scrolling the element under the point.
 - **Remote Control toggle.** Firefox is adding a built-in "Remote control for AI assistants" toolbar switch that turns this on without restarting (and without `navigator.webdriver`). Zen 1.23.4b ships its backend but not the button yet. zen-harness attaches to it unchanged once it appears.
+
+## zen-harness vs browser-harness
+
+| | browser-harness | zen-harness |
+|---|---|---|
+| Browser | Chrome, Chromium-based | Zen (Firefox-based) |
+| Protocol | Chrome DevTools Protocol | WebDriver BiDi |
+| How agents use it | Python snippets, helpers pre-imported | Same, with the same helper names |
+| Finding elements | Accessibility tree | `snapshot()`: compact list of controls with `@e3` refs |
+| Per call (warm) | ~100–130 ms | ~70 ms |
+| Cloud browsers, recordings | Yes | No (local only, by design) |
+
+## FAQ
+
+**Can browser-harness, agent-browser, Playwright MCP or Chrome DevTools MCP control Zen?** Not your running Zen. browser-harness, agent-browser and Chrome DevTools MCP need Chrome's DevTools Protocol, which Firefox removed; Playwright drives its own bundled Firefox build, not your browser and logins. Mozilla's `firefox-devtools-mcp` can attach to Firefox, but as an MCP server (tool definitions every turn, page snapshots in context). zen-harness keeps the low-token "agent writes a short script" style.
+
+**Does it work with regular Firefox?** It is built and tested for Zen. Firefox speaks the same protocol, so pointing `zen_path` and `zen_data_dir` at Firefox should work, but that is untested.
+
+**Is it safe to point at my real browser?** The agent can do anything you can do in that browser, so use it with agents and tasks you trust. It works in tabs it opens, marks the tab it controls with 🐴, and the bundled skill tells agents to stop at passwords, payments and MFA.
+
+**Windows or Linux?** Not yet; process and profile handling is macOS-only today.
 
 ## Develop
 
