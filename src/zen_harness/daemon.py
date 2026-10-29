@@ -30,10 +30,12 @@ EVENTS = [
     "browsingContext.contextCreated", "browsingContext.contextDestroyed",
     "browsingContext.load", "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
     "log.entryAdded", "network.beforeRequestSent", "network.responseCompleted", "network.fetchError",
+    "browsingContext.downloadWillBegin", "browsingContext.downloadEnd",
 ]
 
 
-BLOCKED_BY_DIALOG = ("input.performActions", "script.evaluate", "script.callFunction")
+BLOCKED_BY_DIALOG = ("input.performActions", "script.evaluate", "script.callFunction",
+                     "browsingContext.navigate", "browsingContext.reload")
 
 
 def sock_path(cfg):
@@ -48,6 +50,10 @@ def err_path(cfg):
 def open_session(cfg):
     try:
         url = connection.connect(cfg)
+        # A session that was just stopped is released a moment later; don't race it.
+        deadline = time.time() + 5
+        while not session_free(cfg) and time.time() < deadline:
+            time.sleep(0.2)
         client = marionette_session(cfg)
         if client:
             return Session(client.ws_url, marionette=client)
@@ -141,6 +147,11 @@ class Session:
         p = params or {}
         slot = {"done": threading.Event(), "method": method,
                 "context": p.get("context") or p.get("target", {}).get("context")}
+        if method == "input.performActions" and slot["context"] in self.dialogs:
+            # Input would wait until the dialog closes; say so instead of hanging.
+            d = self.dialogs[slot["context"]]
+            raise BiDiError(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
+                            "answer it with handle_dialog() first")
         self.pending[msg_id] = slot
         with self.lock:
             self.ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
@@ -180,7 +191,7 @@ class Session:
                 self.inflight.pop(req.get("request"), None)
             if method == "network.beforeRequestSent":
                 return  # only finished requests go to the event log
-            summary = {"url": req.get("url"), "method": req.get("method"),
+            summary = {"request": req.get("request"), "url": req.get("url"), "method": req.get("method"),
                        "status": p.get("response", {}).get("status"), "error": p.get("errorText")}
         elif method == "log.entryAdded":
             ctx = p.get("source", {}).get("context")
@@ -203,6 +214,8 @@ class Session:
             if ctx == self.current:
                 self.current = None
             summary = {"url": p.get("url")}
+        elif method.startswith("browsingContext.download"):
+            summary = {k: p.get(k) for k in ("url", "suggestedFilename", "status", "filepath") if k in p}
         else:
             summary = {"url": p.get("url")}
         self.events.append({"event": method, "context": ctx, "time": time.time(), **summary})
@@ -303,6 +316,8 @@ def serve(cfg, session, server):
             try:
                 if req.get("meta") == "stop":
                     state["stop"] = True
+                    path.unlink(missing_ok=True)
+                    session.close()
                     resp = {"ok": True}
                 elif "meta" in req:
                     resp = session.meta(req)
@@ -315,6 +330,7 @@ def serve(cfg, session, server):
             f.flush()
             state["last"] = time.monotonic()
 
+    handlers = []
     try:
         while not state["stop"] and not session.closed.is_set():
             if cfg.idle_timeout and time.monotonic() - state["last"] > cfg.idle_timeout:
@@ -323,8 +339,12 @@ def serve(cfg, session, server):
                 conn, _ = server.accept()
             except socket.timeout:
                 continue
-            threading.Thread(target=handle, args=(conn,), daemon=True).start()
+            t = threading.Thread(target=handle, args=(conn,), daemon=True)
+            t.start()
+            handlers.append(t)
     finally:
+        for t in handlers:  # let in-flight replies (e.g. to stop) reach their clients
+            t.join(timeout=2)
         server.close()
         path.unlink(missing_ok=True)
         session.close()

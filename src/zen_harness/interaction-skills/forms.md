@@ -8,10 +8,9 @@ Find the field first: `snapshot()` (where available) lists inputs with refs like
 
 `fill_input(sel, text)` focuses, clears, types with real key events, then fires `input` and `change`. It works on React/Vue controlled inputs. `type_text(text)` types into whatever has focus (`"\n"` presses Enter).
 
-Rich-text editors (`contenteditable`): JS focus places no caret there, so `fill_input` alone types nothing into an empty editor. Click into it first:
+Rich-text editors (`contenteditable`) work with `fill_input` too; it places the caret itself:
 
 ```python
-click("#editor")
 fill_input("#editor", "Hello")
 print(js("document.querySelector('#editor').innerText"))
 ```

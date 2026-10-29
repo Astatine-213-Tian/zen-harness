@@ -17,16 +17,7 @@ Text, links, prices, form values and error messages are cheaper and exact throug
 
 Images are in device pixels: CSS size (`page_info()["w"]`, `["h"]`) times `devicePixelRatio` (`js("devicePixelRatio")`), which is 2 on a Retina display. Divide by it before passing screenshot coordinates to `click_at_xy`.
 
-`max_dim` resizes with macOS `sips -Z` so the longest side equals `max_dim`. It **also enlarges** smaller images: a 1128×752 viewport with `max_dim=1800` comes back 1800×1200. Pass it only when the image is bigger:
-
-```python
-import struct
-path = capture_screenshot("/tmp/page.png", full=True)
-w, h = struct.unpack(">II", open(path, "rb").read()[16:24])   # PNG header
-if max(w, h) > 1800:
-    path = capture_screenshot("/tmp/page.png", full=True, max_dim=1800)
-print(w, h, path)
-```
+`max_dim` only shrinks: an image whose longest side is already within `max_dim` is left as is.
 
 ## One element
 

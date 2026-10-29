@@ -8,7 +8,9 @@ import base64
 import gzip
 import json
 import math
+import mimetypes
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -286,9 +288,11 @@ def click(selector, timeout=0.0):
         raise RuntimeError(f"click: element not found: {selector!r}")
     box = js(f"(()=>{{const e={_q(selector)};if(!e)return null;"
              "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
-             "return {x:r.left+r.width/2,y:r.top+r.height/2};})()")
+             "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};})()")
     if not box:
         raise RuntimeError(f"click: element not found: {selector!r}")
+    if not box["w"] and not box["h"]:
+        raise RuntimeError(f"click: element is not displayed: {selector!r}")
     click_at_xy(box["x"], box["y"])
 
 
@@ -322,7 +326,9 @@ def fill_input(selector, text, clear_first=True, timeout=0.0):
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"fill_input: element not found: {selector!r}")
     if not js(f"(()=>{{const e={_q(selector)};"
-              "if(!e)return false;e.focus();return true;})()"):
+              "if(!e)return false;e.focus();if(e.isContentEditable){const r=document.createRange();"
+              "r.selectNodeContents(e);r.collapse(false);getSelection().removeAllRanges();"
+              "getSelection().addRange(r);}return true;})()"):
         raise RuntimeError(f"fill_input: element not found: {selector!r}")
     if clear_first:
         press_key("a", 4 if sys.platform == "darwin" else 2)
@@ -363,8 +369,20 @@ def upload_file(selector, path):
                  locator={"type": "css", "value": _ref_css(selector)}, maxNodeCount=1)["nodes"]
     if not nodes:
         raise RuntimeError(f"upload_file: no element for {selector!r}")
-    bidi("input.setFiles", context=ctx, element={"sharedId": nodes[0]["sharedId"]},
-         files=[path] if isinstance(path, str) else list(path))
+    files = [path] if isinstance(path, str) else list(path)
+    try:
+        bidi("input.setFiles", context=ctx, element={"sharedId": nodes[0]["sharedId"]}, files=files)
+    except RuntimeError as e:
+        # Firefox can only add files from the parent process when dom.file.createInChild
+        # is on (automation prefs set it); otherwise build the files inside the page.
+        if "Failed to add file" not in str(e):
+            raise
+        payload = json.dumps([[Path(f).name, mimetypes.guess_type(f)[0] or "application/octet-stream",
+                               base64.b64encode(Path(f).read_bytes()).decode()] for f in files])
+        js(f"""(()=>{{const e={_q(selector)};const dt=new DataTransfer();
+          for(const [n,t,b] of {payload})dt.items.add(new File([Uint8Array.from(atob(b),c=>c.charCodeAt(0))],n,{{type:t}}));
+          e.files=dt.files;e.dispatchEvent(new Event('input',{{bubbles:true}}));
+          e.dispatchEvent(new Event('change',{{bubbles:true}}));}})()""")
 
 
 # --- visual ---
@@ -375,8 +393,9 @@ def capture_screenshot(path=None, full=False, max_dim=None):
     path = str(path or CFG.run_dir / "shot.png")
     r = bidi("browsingContext.captureScreenshot", context=_ctx(),
              origin="document" if full else "viewport", _timeout=60)
-    Path(path).write_bytes(base64.b64decode(r["data"]))
-    if max_dim:
+    data = base64.b64decode(r["data"])
+    Path(path).write_bytes(data)
+    if max_dim and max(struct.unpack(">II", data[16:24])) > max_dim:  # PNG width, height
         subprocess.run(["sips", "-Z", str(max_dim), path], capture_output=True, check=True)
     return path
 

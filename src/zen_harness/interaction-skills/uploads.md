@@ -13,33 +13,18 @@ print(js("[...document.querySelector('#files').files].map(f => f.name)"))
 
 Paths must be absolute. Find the input with `js("[...document.querySelectorAll('input[type=file]')].map(e => e.id || e.name)")`.
 
-## `InvalidStateError` on http(s) pages
+## http(s) pages
 
-With the default `automation_prefs = "skip"`, Zen won't create files inside web-page processes, so on http(s) pages `upload_file` fails with `unsupported operation: Failed to add file ... (InvalidStateError ...)`; only file:// pages work. (Firefox's automation prefs set `dom.file.createInChild = true`, which fixes it.) Without touching prefs, build the files in the page instead; fine for files up to a few MB:
-
-```python
-import base64, json, mimetypes
-from pathlib import Path
-
-def set_files(selector, paths):
-    files = [{"name": Path(p).name, "type": mimetypes.guess_type(p)[0] or "application/octet-stream",
-              "b64": base64.b64encode(Path(p).read_bytes()).decode()} for p in paths]
-    return js(f"""const input = document.querySelector({json.dumps(selector)}), dt = new DataTransfer();
-    for (const f of {json.dumps(files)})
-      dt.items.add(new File([Uint8Array.from(atob(f.b64), c => c.charCodeAt(0))], f.name, {{type: f.type}}));
-    input.files = dt.files;
-    input.dispatchEvent(new Event('input', {{bubbles: true}}));
-    input.dispatchEvent(new Event('change', {{bubbles: true}}));
-    return [...input.files].map(f => f.name)""")
-
-print(set_files("#files", ["/abs/path/report.csv"]))
-```
+Zen only creates uploaded files from outside the page when `dom.file.createInChild` is on (Firefox's automation prefs set it; the harness's default `automation_prefs = "skip"` and runtime mode don't). `upload_file` notices the resulting `InvalidStateError` and builds the files inside the page instead (a `DataTransfer` of `File`s, then `input` and `change` events), so it works on any page. That copy travels through the page, so keep it to files of a few MB.
 
 ## Drop zones without an input
 
-Dispatch the drag events with a `DataTransfer` holding the file (imports as above):
+Dispatch the drag events with a `DataTransfer` holding the file:
 
 ```python
+import base64, json
+from pathlib import Path
+
 f = Path("/abs/path/report.csv")
 data = {"name": f.name, "type": "text/csv", "b64": base64.b64encode(f.read_bytes()).decode()}
 js(f"""const f = {json.dumps(data)}, dt = new DataTransfer();

@@ -15,7 +15,7 @@ for e in drain_events():
         print(e["method"], e["status"], e["url"], e["error"])
 ```
 
-Requests show up once finished (`network.responseCompleted` / `network.fetchError`). Bodies and request ids are not included.
+Requests show up once finished (`network.responseCompleted` / `network.fetchError`). Each carries its `request` id; bodies are not included (see the end of this note).
 
 ## Waiting
 
@@ -70,4 +70,4 @@ print(js("window.__zh_net"))
 bidi("script.removePreloadScript", script=pid)
 ```
 
-Zen also supports BiDi `network.addDataCollector` + `network.getData` for response bodies, but those need request ids, which `drain_events()` doesn't expose yet.
+For response bodies Zen supports BiDi `network.addDataCollector` + `network.getData`, using the `request` id from `drain_events()`.

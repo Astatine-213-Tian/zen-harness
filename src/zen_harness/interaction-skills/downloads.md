@@ -48,4 +48,4 @@ While it downloads, the folder holds an empty `archive.bin` plus `archive.<rando
 
 ## Events
 
-The daemon doesn't subscribe to download events by default. After `bidi("session.subscribe", events=["browsingContext.downloadWillBegin", "browsingContext.downloadEnd"])` (once per session), `drain_events()` lists them, but only with their `url`: the file name, status (`complete` / `canceled`) and path are dropped, so check the folder for those.
+`drain_events()` lists `browsingContext.downloadWillBegin` (with `suggestedFilename`) and `browsingContext.downloadEnd` (with `status`, `complete` or `canceled`, and `filepath`).

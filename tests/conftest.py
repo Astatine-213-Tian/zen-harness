@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,11 @@ def env():
     yield e
     subprocess.run([sys.executable, "-m", "zen_harness.run", "stop"], env=e, capture_output=True)
     kill_profile(tmp / "profile")
+    # A dying Zen keeps the port for a moment; a run started right after would attach to it.
+    from zen_harness.connection import listener
+    deadline = time.time() + 15
+    while listener(int(PORT)) and time.time() < deadline:
+        time.sleep(0.2)
 
 
 @pytest.fixture(scope="session")

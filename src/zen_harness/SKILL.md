@@ -42,6 +42,10 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 - Login walls, passwords, MFA, payment or consent screens: stop and ask the user.
 - Never close or navigate the user's own tabs unless asked; work in tabs you opened.
 
+## Stuck on a browser mechanic?
+
+Run `zen-harness notes` for tested how-tos: tabs, navigation, dialogs, forms, iframes, shadow DOM, uploads, downloads, scrolling, network, screenshots, cookies, login walls. `zen-harness notes <topic>` prints one.
+
 ## Connection
 
 The daemon attaches to Zen on the configured port (default 9222). If Zen is not reachable it follows the user's config:

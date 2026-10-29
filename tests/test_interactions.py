@@ -19,20 +19,7 @@ DEEP = """function zhDeep(sel, root = document) {
 }
 """
 
-# Builds files in the page instead of input.setFiles, as in the uploads note.
-SET_FILES = '''
-import base64, json
-from pathlib import Path
-def set_files(selector, paths):
-    files = [{"name": Path(p).name, "type": "text/csv", "b64": base64.b64encode(Path(p).read_bytes()).decode()}
-             for p in paths]
-    return js(f"""const input = document.querySelector({json.dumps(selector)}), dt = new DataTransfer();
-    for (const f of {json.dumps(files)})
-      dt.items.add(new File([Uint8Array.from(atob(f.b64), c => c.charCodeAt(0))], f.name, {{type: f.type}}));
-    input.files = dt.files;
-    input.dispatchEvent(new Event('change', {{bubbles: true}}));
-    return [...input.files].map(f => f.name)""")
-'''
+IMPORTS = 'import base64, json\nfrom pathlib import Path\n'
 
 
 def value(out):
@@ -124,15 +111,15 @@ click_at_xy(box['x'], box['y'])
 
 def test_hidden_checkbox_needs_its_label(at):
     zh = at("forms.html")
-    assert zh("click('#news'); print(js(\"document.querySelector('#news').checked\"))") == "False"
+    p = zh("click('#news')", check=False)  # the box itself is hidden; click() refuses
+    assert p.returncode == 1 and "not displayed" in p.stderr
     assert zh("click('label[for=news]'); print(js(\"document.querySelector('#news').checked\"))") == "True"
 
 
-def test_contenteditable_needs_a_click_before_fill_input(at):
+def test_fill_input_replaces_contenteditable_text(at):
     zh = at("forms.html")
     read = "print(repr(js(\"document.querySelector('#editor').innerText\")))"
-    assert zh("fill_input('#editor', 'one'); " + read) == "''"  # JS focus leaves no caret
-    assert zh("click('#editor'); fill_input('#editor', 'one'); fill_input('#editor', 'two'); " + read) == "'two'"
+    assert zh("fill_input('#editor', 'one'); fill_input('#editor', 'two'); " + read) == "'two'"
 
 
 # --- shadow DOM ---
@@ -239,20 +226,20 @@ print(js("document.querySelector('#code').value", target_id=frame))
 
 # --- uploads ---
 
-@pytest.mark.xfail(reason="automation_prefs=skip leaves dom.file.createInChild off: input.setFiles "
-                          "fails with InvalidStateError on http(s) pages", strict=False)
 def test_upload_file_on_http_page(at, tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("x")
     assert at("upload.html")(f"upload_file('#files', {str(f)!r}); " + text("#list")) == "a.txt"
 
 
-def test_upload_fallbacks_on_http_page(at, tmp_path):
+def test_upload_file_keeps_type_and_drop_zone_works(at, tmp_path):
     f = tmp_path / "report.csv"
     f.write_text("id,name\n1,Toronto\n")
     zh = at("upload.html")
-    assert zh(SET_FILES + f"print(set_files('#files', [{str(f)!r}]))\n" + text("#list")) == "['report.csv']\nreport.csv"
-    out = zh(SET_FILES + f"""
+    assert zh(f"upload_file('#files', {str(f)!r}); "
+              "print(js(\"(async () => { const f = document.querySelector('#files').files[0]; "
+              "return f.type + ' ' + (await f.text()).split('\\\\n')[0] })()\"))") == "text/csv id,name"
+    out = zh(IMPORTS + f"""
 data = {{"name": "report.csv", "type": "text/csv", "b64": base64.b64encode(Path({str(f)!r}).read_bytes()).decode()}}
 js(f\"\"\"const f = {{json.dumps(data)}}, dt = new DataTransfer();
 dt.items.add(new File([Uint8Array.from(atob(f.b64), c => c.charCodeAt(0))], f.name, {{{{type: f.type}}}}));
@@ -390,3 +377,74 @@ r = bidi("storage.getCookies", partition={"type": "context", "context": current_
 print(sorted((c["name"], c["httpOnly"], c["value"]["value"]) for c in r["cookies"]))
 """)
     assert value(out) == [("sid", True, "s3cr3t"), ("theme", False, "dark")]
+
+
+# --- regressions for helper fixes ---
+
+def test_goto_url_returns_when_beforeunload_asks(at, site):
+    zh = at("dialogs.html")
+    out = zh(f"""
+click('#dirty'); type_text('x')
+goto_url({site + '/forms.html'!r})
+print(page_info().get('dialog', {{}}).get('type'))
+handle_dialog(accept=True)
+for _ in range(50):
+    if page_info().get('url', '').endswith('/forms.html'): break
+    wait(0.1)
+print(page_info()['url'].endswith('/forms.html'))
+""")
+    assert out.splitlines() == ["beforeunload", "True"]
+
+
+def test_input_while_dialog_open_fails_fast(at):
+    zh = at("dialogs.html")
+    zh("click('#delete')")
+    p = zh("click('#prompt')", check=False)
+    assert p.returncode == 1 and "dialog is open" in p.stderr
+    zh("handle_dialog(accept=False)")
+
+
+def test_click_on_hidden_element_raises(at):
+    p = at("forms.html")("click('#fruit-list')", check=False)
+    assert p.returncode == 1 and "not displayed" in p.stderr
+
+
+def test_fill_input_into_empty_contenteditable(at):
+    assert at("forms.html")("fill_input('#editor', 'hello'); print(js(\"document.getElementById('editor').innerText\"))") \
+        == "hello"
+
+
+def test_screenshot_max_dim_only_shrinks(page, tmp_path):
+    out = page(f"""
+import struct
+size = lambda p: struct.unpack('>II', open(p, 'rb').read()[16:24])
+print(size(capture_screenshot({str(tmp_path / 'a.png')!r})) == size(capture_screenshot({str(tmp_path / 'b.png')!r}, max_dim=5000)))
+print(max(size(capture_screenshot({str(tmp_path / 'c.png')!r}, max_dim=300))) == 300)
+""")
+    assert out.splitlines() == ["True", "True"]
+
+
+def test_download_and_network_events_carry_details(at, tmp_path):
+    zh = at("downloads.html")
+    out = zh(f"""
+bidi('browser.setDownloadBehavior', downloadBehavior={{'type': 'allowed', 'destinationFolder': {str(tmp_path)!r}}})
+drain_events()
+click('#csv'); wait(1.5)
+ev = drain_events()
+end = [e for e in ev if e['event'] == 'browsingContext.downloadEnd']
+print(end[0]['status'], end[0]['filepath'].endswith('report.csv'))
+bidi('browser.setDownloadBehavior', downloadBehavior=None)
+js("fetch('/api/items').then(r => r.text())")
+wait(0.5)
+net = [e for e in drain_events() if e['event'] == 'network.responseCompleted' and e['url'].endswith('/api/items')]
+print(bool(net and net[0]['request']))
+""")
+    assert out.splitlines() == ["complete True", "True"]
+
+
+def test_stop_then_immediate_snippet(zh, env):
+    import subprocess, sys
+    for i in range(3):
+        assert zh(f"print(js('{i}'))") == str(i)
+        subprocess.run([sys.executable, "-m", "zen_harness.run", "stop"], env=env, capture_output=True, check=True)
+    assert zh("print(js('7'))") == "7"
