@@ -21,6 +21,7 @@ Commands:
   zen-harness stop       end the session (frees Zen for other tools)
   zen-harness relaunch   quit Zen and reopen it with remote control on
   zen-harness skill      print the agent skill (SKILL.md)
+  zen-harness notes      list interaction notes (iframes, uploads, ...); notes <topic> prints one
   zen-harness --version
 
 Config: env ZH_* > {config.CONFIG_FILE} > defaults. See README.md.
@@ -61,6 +62,27 @@ SESSION_MODES = {
     "bidi": "session is BiDi-only (a force-killed daemon locks Zen until it restarts; "
             "`zen-harness relaunch` adds --marionette)",
 }
+
+
+def notes(topic=None):
+    """List the interaction notes with their one-line summaries, or print one."""
+    folder = resources.files("zen_harness").joinpath("interaction-skills")
+    found = {p.name[:-3]: p for p in folder.iterdir() if p.name.endswith(".md")}
+    if topic is None:
+        width = max(map(len, found))
+        print("Interaction notes: read one when stuck on a browser mechanic.\n")
+        for name in sorted(found):
+            # A note is "# Title", a blank line, then its one-line summary.
+            summary = next((line for line in found[name].read_text().splitlines()[1:] if line.strip()), "")
+            print(f"  {name:<{width}}  {summary}")
+        print("\nzen-harness notes <topic>")
+        return 0
+    name = topic.removesuffix(".md")
+    if name not in found:
+        print(f"zen-harness: no note {topic!r}; topics: {', '.join(sorted(found))}", file=sys.stderr)
+        return 2
+    print(found[name].read_text(), end="")
+    return 0
 
 
 def doctor(cfg):
@@ -121,6 +143,8 @@ def main():
     if cmd == "skill":
         print(resources.files("zen_harness").joinpath("SKILL.md").read_text(), end="")
         return 0
+    if cmd == "notes":
+        return notes(args[1] if len(args) > 1 else None)
     if cmd == "status":
         if not ipc.daemon_alive(cfg):
             print("no session")

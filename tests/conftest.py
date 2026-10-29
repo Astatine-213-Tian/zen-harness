@@ -1,5 +1,6 @@
 """Integration tests run real snippets through the CLI against a headless Zen
 on a throwaway profile (the local stand-in for the user's browser)."""
+import importlib.util
 import os
 import signal
 import subprocess
@@ -43,6 +44,18 @@ def env():
     kill_profile(tmp / "profile")
 
 
+@pytest.fixture(scope="session")
+def site():
+    """Base URL of the fixture server: http pages, cookies, downloads, a JSON API.
+    The same server under http://localhost:<port> is a second origin."""
+    spec = importlib.util.spec_from_file_location("fixture_server", ROOT / "tests/fixtures/server.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    server, base = mod.start()
+    yield base
+    server.shutdown()
+
+
 @pytest.fixture
 def zh(env):
     """Run a snippet; return stdout. Raises with stderr on a non-zero exit."""
@@ -60,3 +73,12 @@ def page(zh):
     """A fresh fixture tab controlled by the harness."""
     zh(f"new_tab({FIXTURE!r}); wait_for_load()")
     return zh
+
+
+@pytest.fixture
+def at(zh, site):
+    """Open a fixture page from the server in a fresh controlled tab: at("forms.html")."""
+    def open_page(path):
+        zh(f"new_tab({site + '/' + path!r}); wait_for_load()")
+        return zh
+    return open_page

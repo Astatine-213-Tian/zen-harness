@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Forms</title></head>
+<body>
+<form id="order" onsubmit="event.preventDefault()">
+  <!-- #city behaves like a React controlled input: assigning .value from JS updates
+       React's value tracker, so the next input event looks like "no change". -->
+  <label>City <input id="city" name="city"></label>
+  <p id="state"></p>
+  <select id="seat" name="seat">
+    <option value="">Choose a seat</option>
+    <option value="w">Window</option>
+    <option value="a">Aisle</option>
+  </select>
+  <p id="seat-out"></p>
+  <div id="fruit" role="combobox" tabindex="0" aria-expanded="false">Pick a fruit</div>
+  <ul id="fruit-list" role="listbox" hidden>
+    <li role="option">Apple</li>
+    <li role="option">Pear</li>
+  </ul>
+  <p id="fruit-out"></p>
+  <label><input id="agree" name="agree" type="checkbox"> I agree</label>
+  <input id="news" name="news" type="checkbox" style="display: none"><label for="news">Newsletter</label>
+  <label><input id="size-s" type="radio" name="size" value="s"> Small</label>
+  <label><input id="size-l" type="radio" name="size" value="l"> Large</label>
+  <div id="editor" contenteditable="true" style="min-height: 2em; border: 1px solid"></div>
+</form>
+  <script>
+    const state = {city: ''};
+    const city = document.getElementById('city');
+    const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    let tracked = '';
+    Object.defineProperty(city, 'value', {
+      configurable: true,
+      get() { return native.get.call(this); },
+      set(v) { tracked = String(v); native.set.call(this, v); },
+    });
+    city.addEventListener('input', () => {
+      if (city.value === tracked) return;
+      tracked = city.value;
+      state.city = city.value;
+      document.getElementById('state').textContent = 'state:' + state.city;
+    });
+    document.getElementById('seat').addEventListener('change', e =>
+      document.getElementById('seat-out').textContent = 'seat:' + e.target.value);
+    const fruit = document.getElementById('fruit'), list = document.getElementById('fruit-list');
+    fruit.addEventListener('click', () => { list.hidden = false; fruit.setAttribute('aria-expanded', 'true'); });
+    list.addEventListener('click', e => {
+      document.getElementById('fruit-out').textContent = 'fruit:' + e.target.textContent;
+      list.hidden = true; fruit.setAttribute('aria-expanded', 'false');
+    });
+  </script>
+</body>
+</html>

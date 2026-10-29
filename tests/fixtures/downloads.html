@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Downloads</title></head>
+<body>
+  <a id="csv" href="/report.csv">Export CSV</a>
+  <a id="slow" href="/archive.bin">Download archive</a>
+  <a id="blob" href="#">Save notes</a>
+  <script>
+    document.getElementById('blob').addEventListener('click', e => {
+      e.preventDefault();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob(['hello from a blob\n'], {type: 'text/plain'}));
+      a.download = 'notes.txt';
+      a.click();
+    });
+  </script>
+</body>
+</html>

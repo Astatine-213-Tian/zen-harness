@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Upload</title></head>
+<body>
+  <!-- Typical styled upload: the real input is hidden behind a button. -->
+  <button id="pick" onclick="document.getElementById('files').click()">Choose files</button>
+  <input id="files" type="file" multiple style="display: none">
+  <p id="list"></p>
+  <div id="drop" style="width: 300px; height: 100px; border: 2px dashed">Drop files here</div>
+  <p id="dropped"></p>
+  <x-uploader id="shadow-up"></x-uploader>
+  <p id="shadow-list"></p>
+  <script>
+    document.getElementById('files').addEventListener('change', e =>
+      document.getElementById('list').textContent = [...e.target.files].map(f => f.name).join(','));
+    customElements.define('x-uploader', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({mode: 'open'}).innerHTML = '<input type="file">';
+        this.shadowRoot.querySelector('input').addEventListener('change', e =>
+          document.getElementById('shadow-list').textContent = e.target.files[0].name);
+      }
+    });
+    const drop = document.getElementById('drop');
+    drop.addEventListener('dragover', e => e.preventDefault());
+    drop.addEventListener('drop', async e => {
+      e.preventDefault();
+      const f = e.dataTransfer.files[0];
+      document.getElementById('dropped').textContent = f.name + ':' + await f.text();
+    });
+  </script>
+</body>
+</html>
