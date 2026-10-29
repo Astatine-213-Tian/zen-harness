@@ -106,6 +106,118 @@ def js(expression, target_id=None):
         raise
 
 
+# Finds the first match for a CSS selector, looking inside open shadow roots too.
+_DEEP = ("((s)=>{const f=r=>{let e=r.querySelector(s);if(e)return e;"
+         "for(const h of r.querySelectorAll('*'))if(h.shadowRoot&&(e=f(h.shadowRoot)))return e;"
+         "return null};return f(document)})")
+
+
+def _ref_css(selector):
+    """'@e3' -> the CSS for that snapshot ref; anything else is already CSS."""
+    return f'[data-zh-ref="{selector[1:]}"]' if selector.startswith("@") else selector
+
+
+def _q(selector):
+    """JS expression for the element matching a CSS selector or a snapshot ref like '@e3'."""
+    if selector.startswith("@"):
+        return f"{_DEEP}({json.dumps(_ref_css(selector))})"
+    return f"document.querySelector({json.dumps(selector)})"
+
+
+_SNAPSHOT_JS = r"""
+((query, within, limit, hrefs) => {
+  const ROLES = new Set(['button','link','checkbox','radio','tab','menuitem','menuitemcheckbox',
+    'menuitemradio','option','switch','textbox','combobox','searchbox','slider','spinbutton','treeitem','listbox']);
+  const INPUT = {checkbox:'checkbox', radio:'radio', button:'button', submit:'button', reset:'button',
+    image:'button', file:'button', color:'button', search:'searchbox', number:'spinbutton', range:'slider'};
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  const cut = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+  const roleOf = e => {
+    const r = (e.getAttribute('role') || '').split(' ')[0];
+    if (ROLES.has(r)) return r;
+    const t = e.tagName;
+    if (t === 'A' && e.hasAttribute('href')) return 'link';
+    if (t === 'BUTTON' || t === 'SUMMARY') return 'button';
+    if (t === 'INPUT') { const ty = (e.type || 'text').toLowerCase(); return ty === 'hidden' ? null : (INPUT[ty] || 'textbox'); }
+    if (t === 'SELECT') return e.multiple ? 'listbox' : 'combobox';
+    if (t === 'TEXTAREA' || e.getAttribute('contenteditable') === 'true' || e.getAttribute('contenteditable') === '') return 'textbox';
+    return null;
+  };
+  const nameOf = e => {
+    const by = e.getAttribute('aria-labelledby');
+    if (by) {
+      const root = e.getRootNode().getElementById ? e.getRootNode() : document;
+      const s = clean(by.split(/\s+/).map(id => root.getElementById(id)?.innerText || '').join(' '));
+      if (s) return s;
+    }
+    if (clean(e.getAttribute('aria-label'))) return clean(e.getAttribute('aria-label'));
+    if (e.labels && e.labels.length) { const s = clean([...e.labels].map(l => l.innerText).join(' ')); if (s) return s; }
+    if (e.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(e.type)) return clean(e.value);
+    if (!['INPUT', 'TEXTAREA', 'SELECT'].includes(e.tagName)) { const s = clean(e.innerText); if (s) return s; }
+    return clean(e.getAttribute('placeholder') || e.getAttribute('title') || e.getAttribute('alt')
+      || e.querySelector('img[alt]')?.alt || e.getAttribute('name'));
+  };
+  const shown = e => {
+    const r = e.getBoundingClientRect();
+    if (!r.width && !r.height) return false;
+    const s = getComputedStyle(e);
+    return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0' && !e.closest('[aria-hidden="true"]');
+  };
+  const els = [];
+  const walk = root => { for (const e of root.querySelectorAll('*')) { els.push(e); if (e.shadowRoot) walk(e.shadowRoot); } };
+  walk(document);
+  for (const e of els) if (e.hasAttribute('data-zh-ref')) e.removeAttribute('data-zh-ref');
+  const scope = within ? document.querySelector(within) : null;
+  if (within && !scope) throw new Error('snapshot: nothing matches within=' + within);
+  const q = (query || '').toLowerCase();
+  const items = [];
+  let total = 0;
+  for (const e of els) {
+    if (scope && !scope.contains(e)) continue;
+    const role = roleOf(e);
+    if (!role || !shown(e)) continue;
+    const name = cut(nameOf(e), 80);
+    const href = role === 'link' ? e.getAttribute('href') || '' : '';
+    if (q && !(role + ' ' + name + (hrefs ? ' ' + href : '')).toLowerCase().includes(q)) continue;
+    total++;
+    if (items.length >= limit) continue;
+    const ref = 'e' + (items.length + 1);
+    e.setAttribute('data-zh-ref', ref);
+    const extra = [];
+    if (e.tagName === 'SELECT') extra.push('value="' + cut(clean(e.selectedOptions[0]?.text), 40) + '"');
+    else if ('value' in e && ['textbox', 'searchbox', 'spinbutton', 'slider', 'combobox'].includes(role) && e.value)
+      extra.push('value="' + (e.type === 'password' ? '•••' : cut(clean(e.value), 40)) + '"');
+    if (e.checked || e.getAttribute('aria-checked') === 'true' || e.getAttribute('aria-pressed') === 'true') extra.push('checked');
+    if (e.getAttribute('aria-expanded')) extra.push(e.getAttribute('aria-expanded') === 'true' ? 'expanded' : 'collapsed');
+    if (e.getAttribute('aria-selected') === 'true') extra.push('selected');
+    if (e.disabled || e.getAttribute('aria-disabled') === 'true') extra.push('disabled');
+    if (hrefs && href) extra.push('-> ' + cut(href, 80));
+    items.push([ref, role, name, extra.join(' ')]);
+  }
+  return {items, total};
+})
+"""
+
+
+def snapshot(query=None, within=None, limit=150, hrefs=False):
+    """Compact list of the controlled tab's visible interactive elements, one per line:
+
+        @e3 button "Star VibiumDev/vibium"
+        @e7 textbox "Where from?" value="Toronto"
+
+    Pass a ref like "@e3" to click / fill_input / wait_for_element / dispatch_key /
+    upload_file. Refs last until the next snapshot or navigation.
+    query: keep elements whose role or name (plus link href, with hrefs=True) contains this text.
+    within: CSS selector to limit the snapshot to one part of the page.
+    hrefs: append link targets. Open shadow roots are included; iframes are not."""
+    r = js(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},{json.dumps(bool(hrefs))})")
+    lines = [f'@{ref} {role} {json.dumps(name, ensure_ascii=False)}' + (f" {extra}" if extra else "")
+             for ref, role, name, extra in r["items"]]
+    if r["total"] > len(lines):
+        lines.append(f"... {r['total'] - len(lines)} more; narrow with query= or within=")
+    return "\n".join(lines) or "(no interactive elements" + (f" matching {query!r})" if query else ")")
+
+
 # --- navigation and page ---
 
 def goto_url(url):
@@ -172,7 +284,7 @@ def click(selector, timeout=0.0):
     """Scroll the first element matching `selector` into view and click its centre."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"click: element not found: {selector!r}")
-    box = js(f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)return null;"
+    box = js(f"(()=>{{const e={_q(selector)};if(!e)return null;"
              "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
              "return {x:r.left+r.width/2,y:r.top+r.height/2};})()")
     if not box:
@@ -209,14 +321,14 @@ def fill_input(selector, text, clear_first=True, timeout=0.0):
     key events, then fire input+change so the framework sees the new value."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"fill_input: element not found: {selector!r}")
-    if not js(f"(()=>{{const e=document.querySelector({json.dumps(selector)});"
+    if not js(f"(()=>{{const e={_q(selector)};"
               "if(!e)return false;e.focus();return true;})()"):
         raise RuntimeError(f"fill_input: element not found: {selector!r}")
     if clear_first:
         press_key("a", 4 if sys.platform == "darwin" else 2)
         press_key("Backspace")
     type_text(text)
-    js(f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)return;"
+    js(f"(()=>{{const e={_q(selector)};if(!e)return;"
        "e.dispatchEvent(new Event('input',{bubbles:true}));"
        "e.dispatchEvent(new Event('change',{bubbles:true}));})()")
 
@@ -224,7 +336,7 @@ def fill_input(selector, text, clear_first=True, timeout=0.0):
 def dispatch_key(selector, key="Enter", event="keypress"):
     """Dispatch a synthetic DOM KeyboardEvent on an element (for sites that ignore real keys)."""
     kc = {"Enter": 13, "Tab": 9, "Escape": 27, "Backspace": 8, " ": 32}.get(key, ord(key) if len(key) == 1 else 0)
-    js(f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(e){{e.focus();"
+    js(f"(()=>{{const e={_q(selector)};if(e){{e.focus();"
        f"e.dispatchEvent(new KeyboardEvent({json.dumps(event)},{{key:{json.dumps(key)},"
        f"code:{json.dumps(key)},keyCode:{kc},which:{kc},bubbles:true}}));}}}})()")
 
@@ -248,7 +360,7 @@ def upload_file(selector, path):
     """Set files on an <input type=file>. `path` is an absolute path or a list of them."""
     ctx = _ctx()
     nodes = bidi("browsingContext.locateNodes", context=ctx,
-                 locator={"type": "css", "value": selector}, maxNodeCount=1)["nodes"]
+                 locator={"type": "css", "value": _ref_css(selector)}, maxNodeCount=1)["nodes"]
     if not nodes:
         raise RuntimeError(f"upload_file: no element for {selector!r}")
     bidi("input.setFiles", context=ctx, element={"sharedId": nodes[0]["sharedId"]},
@@ -403,7 +515,7 @@ def wait_for_load(timeout=15.0):
 
 def wait_for_element(selector, timeout=10.0, visible=False):
     """Poll until querySelector(selector) exists (and is visible if asked). True if found."""
-    check = (f"(()=>{{const e=document.querySelector({json.dumps(selector)});if(!e)return false;"
+    check = (f"(()=>{{const e={_q(selector)};if(!e)return false;"
              + ("const r=e.getBoundingClientRect();const s=getComputedStyle(e);"
                 "return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';"
                 if visible else "return true;") + "})()")

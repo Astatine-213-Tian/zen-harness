@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Snapshot fixture</title></head>
+<body>
+  <nav><a href="/docs">Docs</a> <a href="https://example.com/pricing">Pricing</a></nav>
+  <form id="search">
+    <label for="from">Leaving from</label> <input id="from" value="Toronto">
+    <input id="to" placeholder="Going to">
+    <input type="password" aria-label="Password" value="secret">
+    <label><input type="checkbox" id="direct" checked> Direct flights only</label>
+    <select id="cabin" aria-label="Cabin"><option>Economy</option><option selected>Business</option></select>
+    <button type="button" id="search-btn" onclick="this.textContent = 'Searching'">Search</button>
+    <button type="button" aria-label="Swap origin and destination">⇄</button>
+    <button type="button" disabled>Book</button>
+    <button type="button" style="display:none">Hidden</button>
+    <div role="button" aria-expanded="false" tabindex="0">More filters</div>
+  </form>
+  <custom-widget></custom-widget>
+  <script>
+    customElements.define('custom-widget', class extends HTMLElement {
+      connectedCallback() {
+        const root = this.attachShadow({mode: 'open'});
+        root.innerHTML = '<button id="inner" onclick="this.textContent=\'Shadow clicked\'">Shadow action</button>';
+      }
+    });
+  </script>
+</body>
+</html>
