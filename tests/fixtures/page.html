@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture</title></head>
+<body style="height: 3000px">
+  <h1 id="heading">zen-harness fixture</h1>
+  <input id="name" placeholder="Name">
+  <button id="go" onclick="document.getElementById('out').textContent = 'clicked:' + document.getElementById('name').value">Go</button>
+  <p id="out"></p>
+  <p id="keys"></p>
+  <input id="file" type="file">
+  <button id="alert" onclick="window.__confirmed = confirm('Proceed?')">Confirm</button>
+  <iframe id="frame" srcdoc="<p id='inner'>inside frame</p>"></iframe>
+  <script>
+    document.getElementById('name').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('keys').textContent = 'enter:' + e.target.value;
+    });
+    console.log('fixture loaded');
+  </script>
+</body>
+</html>

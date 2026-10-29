@@ -1,0 +1,61 @@
+---
+name: zen-harness
+description: "Control the user's real Zen browser (tabs, logins, profile) from Python snippets over WebDriver BiDi. Use for web tasks that need interaction, the user's signed-in session, JS rendering, or a bot-protected page."
+---
+
+# zen-harness
+
+Drives the user's own Zen browser: their tabs, cookies and logins. Send a Python snippet on stdin; the helpers below are pre-imported and a background daemon keeps the browser session open between calls (~70 ms per call once warm).
+
+```bash
+zen-harness <<'PY'
+new_tab("https://github.com/notifications")
+wait_for_load()
+print(page_info())
+PY
+```
+
+## When not to use it
+
+If a plain HTTP request can read it (a public page, an API, docs), use `curl` or `http_get(url)` and leave the browser alone. Use the browser for interaction, the user's logged-in session, JS-rendered pages, or bot-protected pages.
+
+## Helpers
+
+- Tabs: `new_tab(url)` (opens in the background and controls it; use this for the first navigation), `goto_url(url)`, `list_tabs()`, `current_tab()`, `switch_tab(tab)`, `activate_tab(tab)`, `close_tab(tab=None)`, `ensure_real_tab()`
+- Read: `page_info()` → `{url, title, w, h, sx, sy, pw, ph}`, or `{dialog: ...}` while a dialog is open; `js(expr, target_id=None)`; `capture_screenshot(path=None, full=False, max_dim=None)`
+- Act: `click(selector)`, `click_at_xy(x, y)`, `fill_input(selector, text)`, `type_text(text)`, `press_key(key, modifiers=0)` (1=Alt 2=Ctrl 4=Cmd 8=Shift), `scroll(x, y, dy)`, `upload_file(selector, path)`, `dispatch_key(selector, key)`, `handle_dialog(accept=True, text=None)`
+- Wait: `wait_for_load()`, `wait_for_element(selector, timeout=10, visible=False)`, `wait_for_network_idle()`, `wait(seconds)`
+- Other: `iframe_target(url_substr)` (pass to `js(..., target_id=...)`), `drain_events()` (console logs, finished requests, dialogs), `http_get(url)`, `bidi(method, **params)` (raw WebDriver BiDi)
+
+`js()` returns plain Python values. A top-level `return` or `await` works.
+
+## Working on a page
+
+- First navigation is `new_tab(url)`. It opens a background tab, so the user's visible tab stays put. Call `activate_tab(...)` only when the user asks to see it, or when a page stalls while hidden.
+- The controlled tab's title starts with 🐴 so the user can see which tab you hold.
+- After a navigation or a click that loads a page, call `wait_for_load()` (or `wait_for_element(...)` for single-page apps).
+- Find elements with `js(...)` and print only what you need, e.g. the text, href and selector of matching links. Do not print whole pages.
+- Prefer `click(selector)` and `fill_input(selector, text)`. Use `click_at_xy` for canvas or odd widgets: get coordinates from `getBoundingClientRect()` in `js`, or from a screenshot.
+- Finding a control by its label: query in `js`, e.g. `[...document.querySelectorAll('button,a,[role=button]')].find(e => e.innerText.trim() === 'Search')`, then click its box centre. (BiDi's accessibility locator hangs in Zen; don't use it.)
+- Dialogs: a click that opens alert/confirm/prompt returns at once; `page_info()` then shows `{dialog: ...}`. Answer it with `handle_dialog(...)`.
+- Verify the result with a targeted `js(...)` or `page_info()` check before reporting success.
+- Login walls, passwords, MFA, payment or consent screens: stop and ask the user.
+- Never close or navigate the user's own tabs unless asked; work in tabs you opened.
+
+## Connection
+
+The daemon attaches to Zen on the configured port (default 9222). If Zen is not reachable it follows the user's config:
+
+- `if_not_running = "launch"` (default): starts Zen with remote control on.
+- `if_not_listening = "instruct"` (default): Zen is running without remote control, so it prints the fix. `relaunch` restarts Zen automatically instead.
+
+Follow the user's own instructions about which profile to use and whether relaunching is okay. Show the printed fix to the user rather than retrying in a loop. Other commands: `zen-harness doctor`, `zen-harness status`, `zen-harness stop` (ends the session so other tools can connect), `zen-harness relaunch`.
+
+Zen allows one remote-control session at a time. If another tool holds it, the error says so; stop the other tool or ask the user.
+
+## Reusable workflows
+
+Workspace: `~/.zen-harness` (or `$ZH_WORKSPACE`).
+
+- `agent_helpers.py`: put task-specific helpers here; they load into every snippet.
+- `domain-skills/<site>/*.md`: notes and snippets per site (e.g. `domain-skills/expedia/search-flights.md`). With `ZH_DOMAIN_SKILLS=1`, `goto_url` returns the matching files; read them before inventing an approach. After working out a non-obvious flow, save it there.
