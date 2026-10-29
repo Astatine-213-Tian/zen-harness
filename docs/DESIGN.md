@@ -145,7 +145,7 @@ Plain files under `~/.zen-harness` (independent of any other tool):
 - **Wheel input is ignored in background tabs.** `scroll()` falls back to scrolling the nearest scrollable element under the point via JS.
 - **The `accessibility` locator in `browsingContext.locateNodes` hangs** in Zen; not used.
 
-## Hiding automation: research (not built yet)
+## Hiding automation: `remote_mode = "runtime"` (opt-in, built)
 
 Question: can the harness control the main profile without Firefox's automation flag (`navigator.webdriver = true`)?
 
@@ -163,3 +163,8 @@ Question: can the harness control the main profile without Firefox's automation 
   - Firefox plans to confine such sessions to a separate container (Bug 2072964). If that lands, sessions would lose the user's logins.
 - **The DevTools route's security cost:** a DevTools server gives chrome-level control of the browser to anything that connects. Keep `devtools.debugger.prompt-connection=true` (the user clicks Allow), or listen on a 0700 Unix socket.
 - **Cheaper partial fix:** a BiDi preload script redefining `Navigator.prototype.webdriver` reports false in pages and same-origin iframes. It is detectable via the getter's `toString()` and misses tabs loaded before the session.
+- **Built as opt-in `remote_mode = "runtime"`** (`runtime.py`). The harness checks the three prefs, then:
+  - If Zen is running, it forwards `--start-debugger-server <0700 Unix socket>` to it (or starts Zen plainly with that flag).
+  - Over RDP it calls `RemoteAgent.startAtRuntime` and `Marionette.startAtRuntime` (Marionette's port temporarily set to 0 so it can't collide), both with `isBrowserAutomation: false`.
+  - It then closes the DevTools listeners and removes the socket, and attaches as usual (through Marionette).
+  - Tested: `navigator.webdriver === false`.

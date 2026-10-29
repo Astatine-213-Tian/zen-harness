@@ -10,12 +10,16 @@ CHOICES = {
     "if_not_running": ("launch", "instruct"),
     "if_not_listening": ("instruct", "relaunch"),
     "automation_prefs": ("skip", "apply"),
+    "remote_mode": ("flags", "runtime"),
 }
 
 
 @dataclass(frozen=True)
 class Config:
     port: int = 9222
+    # flags: start Zen with automation flags. runtime: turn remote control on inside a
+    # running Zen, without the automation flag (opt-in; needs three about:config settings).
+    remote_mode: str = "flags"
     marionette_port: int = 0  # Marionette port when the harness starts Zen; 0 = any free port
     profile: str = ""  # profile name or path; empty = Zen's default profile
     zen_path: str = "/Applications/Zen.app/Contents/MacOS/zen"

@@ -52,10 +52,31 @@ Record the answers in the agent's global instructions (Claude Code: `~/.claude/C
   `zen-harness stop` when the task is done.
 ```
 
-Only if the user wants a non-default profile or port, also write `~/.config/zen-harness/config.toml`:
+### Optional: hide automation from websites (runtime mode)
+
+By default Zen is started with automation flags, so websites can see `navigator.webdriver = true` and some bot-protected sites react to it. Runtime mode turns remote control on inside the already-running Zen instead: no restart, and websites see a normal browser. Offer it to the user, explaining the trade-off. Only set it up if they say yes.
+
+- **Cost:** three about:config settings stay on. They let a local program open a DevTools connection with full control of the browser. zen-harness opens one only for a moment, on a private socket, and closes it again.
+- **What the user sees:** a robot icon and a red-striped address bar while remote control is on, plus an "Allow remote control?" prompt (and possibly a DevTools "Allow connection?" prompt) the first time per browser session.
+- **Port:** port 9222 must stay free for Zen. Chrome's remote debugging must use another port.
+
+If they agree, ask the user to open `about:config` in Zen themselves and set each of these to `true` (do not edit their prefs files yourself):
+
+```text
+remote.experimental.dynamicstart.enabled
+devtools.chrome.enabled
+devtools.debugger.remote-enabled
+```
+
+Then add `remote_mode = "runtime"` to `~/.config/zen-harness/config.toml`, and run `zen-harness doctor`. It should say `runtime mode: ready`.
+
+### Config file
+
+Only if the user wants a non-default profile or port, or runtime mode, also write `~/.config/zen-harness/config.toml`:
 
 ```toml
 profile = "Work"              # profile name from Zen, or a profile folder path
+# remote_mode = "runtime"         # hide automation from websites (see above)
 # port = 9222
 # if_not_listening = "relaunch"   # make the harness itself restart Zen automatically
 ```

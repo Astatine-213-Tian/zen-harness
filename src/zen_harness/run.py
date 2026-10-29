@@ -91,7 +91,12 @@ def doctor(cfg):
     else:
         print("session daemon: not running"
               + (f"; next {SESSION_MODES['marionette' if mport else 'bidi']}" if kind == "bidi" else ""))
-    if profile and not kind:
+    if profile and cfg.remote_mode == "runtime":
+        from . import runtime
+        missing = runtime.missing_prefs(profile)
+        print("runtime mode: " + ("ready; the next call turns remote control on inside Zen, no restart"
+                                  if not missing else runtime.prefs_help(missing)))
+    elif profile and not kind:
         print(f"start command: {connection.start_shell(cfg, profile)}")
     return 0
 

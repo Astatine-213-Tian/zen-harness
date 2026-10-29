@@ -62,6 +62,7 @@ Precedence: `ZH_*` env vars > `~/.config/zen-harness/config.toml` > defaults.
 ```toml
 # ~/.config/zen-harness/config.toml
 port = 9222
+remote_mode = "flags"         # or "runtime": no restart, websites can't tell (opt-in, see below)
 profile = ""                  # name from profiles.ini, a directory, or "" for Zen's default
 if_not_running = "launch"     # or "instruct"
 if_not_listening = "instruct" # or "relaunch"
@@ -89,7 +90,11 @@ tab_marker = "🐴"             # prefix on the controlled tab's title; "" to di
 ## Things to know
 
 - **One session at a time.** Zen accepts a single remote-control client. While zen-harness holds it, other tools (e.g. Mozilla's `firefox-devtools-mcp`) can't connect; `zen-harness stop` or the idle timeout releases it.
-- **Sites can tell.** When Zen is started with `--remote-debugging-port`, `navigator.webdriver` is `true` for every page in that browser session. Some bot-protected sites react to that. Restart Zen normally to browse without it.
+- **Sites can tell, unless you opt into runtime mode.** In the default `flags` mode Zen is started with automation flags, so `navigator.webdriver` is `true` for every page until Zen restarts normally, and some bot-protected sites react to it. With `remote_mode = "runtime"` the harness turns remote control on inside your running Zen instead: no restart, `navigator.webdriver` stays `false`, and Firefox applies no automation prefs. It needs three about:config settings once (`remote.experimental.dynamicstart.enabled`, `devtools.chrome.enabled`, `devtools.debugger.remote-enabled`); see [install.md](install.md#optional-hide-automation-from-websites-runtime-mode). Trade-offs:
+  - Those settings let a local program open a DevTools connection with full browser control. The harness opens one only for a moment, on a private socket, and closes it.
+  - Firefox fixes the port to 9222.
+  - You see a robot icon and a red-striped address bar while it's on.
+  - Firefox plans to move such sessions into a separate container, which would hide your logins from them.
 - **Automation prefs.** In that mode Firefox also applies ~120 "recommended" automation prefs (e.g. turns off Safe Browsing) while it runs. With `automation_prefs = "skip"` (default), the harness adds `user_pref("remote.prefs.recommended", false);` to the profile's `user.js` when it launches the profile, so your everyday settings stay.
 - **Force-killing the daemon.** When the harness starts Zen it adds `--marionette` and opens the session through Marionette, which Zen ends as soon as the daemon's connection drops, even after `kill -9`. If Zen was started with only `--remote-debugging-port`, the harness falls back to a plain BiDi session, which Zen keeps after its client disappears: the daemon still ends it on errors, idle timeout and SIGTERM/SIGINT/SIGHUP, but after a `kill -9` run `zen-harness relaunch`. `zen-harness doctor` shows which kind is in use.
 - **Background tabs.** Agents work in background tabs. Clicks, typing and JS work there; wheel scrolling falls back to scrolling the element under the point.

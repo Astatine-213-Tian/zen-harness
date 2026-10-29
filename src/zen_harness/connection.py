@@ -205,6 +205,43 @@ def relaunch(cfg: Config) -> str:
     return launch(cfg, profile)
 
 
+def start_runtime(cfg: Config, profile: Path, running: bool, timeout=10.0) -> str:
+    """remote_mode=runtime: turn remote control on inside Zen without the automation flag.
+    No restart: a running Zen is asked over a short-lived DevTools socket."""
+    from . import runtime
+
+    if cfg.port != runtime.RUNTIME_PORT:
+        raise ConnectError(f"remote_mode = \"runtime\" always listens on port {runtime.RUNTIME_PORT} "
+                           "(Firefox fixes it); set port = 9222 or use remote_mode = \"flags\"")
+    missing = runtime.missing_prefs(profile)
+    if missing:
+        raise ConnectError(runtime.prefs_help(missing))
+    if not running and cfg.if_not_running != "launch":
+        raise ConnectError("Zen is not running. Open Zen normally, then retry.")
+    sock = runtime.devtools_socket()
+    try:
+        if running:
+            runtime.request_debugger(cfg, profile, sock)
+        else:
+            sock.parent.mkdir(mode=0o700, exist_ok=True)
+            sock.unlink(missing_ok=True)
+            log = cfg.run_dir / "zen.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            cmd = [cfg.zen_path, "--profile", str(profile), *runtime.debugger_args(sock)]
+            subprocess.Popen(cmd + (["--headless"] if cfg.headless else []), stdin=subprocess.DEVNULL,
+                             stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
+            runtime.wait_for_socket(sock, 30.0)
+        runtime.start(sock)
+    except (runtime.BootstrapError, OSError, subprocess.SubprocessError) as e:
+        raise ConnectError(f"could not turn on remote control inside Zen: {e}") from e
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if listener(cfg.port) == "bidi":
+            return session_url(cfg)
+        time.sleep(0.2)
+    raise ConnectError(f"remote control started but port {cfg.port} did not open within {timeout:.0f}s")
+
+
 def connect(cfg: Config) -> str:
     kind = listener(cfg.port)
     if kind == "bidi":
@@ -213,7 +250,10 @@ def connect(cfg: Config) -> str:
         raise ConnectError(f"port {cfg.port} is held by a Chromium browser's DevTools, not Zen. "
                            "Free it or set ZH_PORT to another port.")
     profile = resolve_profile(cfg)
-    if any(_same(prof, profile) for _, prof in running_zen(cfg)):
+    running = any(_same(prof, profile) for _, prof in running_zen(cfg))
+    if cfg.remote_mode == "runtime":
+        return start_runtime(cfg, profile, running)
+    if running:
         if cfg.if_not_listening == "relaunch":
             return relaunch(cfg)
         raise ConnectError(

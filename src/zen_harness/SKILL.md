@@ -51,6 +51,8 @@ The daemon attaches to Zen on the configured port (default 9222). If Zen is not 
 
 Follow the user's own instructions about which profile to use and whether relaunching is okay. Show the printed fix to the user rather than retrying in a loop. Other commands: `zen-harness doctor`, `zen-harness status`, `zen-harness stop` (ends the session so other tools can connect), `zen-harness relaunch`.
 
+With `remote_mode = "runtime"` (opt-in) the harness turns remote control on inside the running Zen instead of restarting it. The user may see an "Allow remote control?" prompt in Zen the first time; tell them to click Allow. If it reports missing about:config settings, show the user that message; don't change their browser settings yourself.
+
 Zen allows one remote-control session at a time. If another tool holds it, the error says so; stop the other tool or ask the user.
 
 ## Reusable workflows
