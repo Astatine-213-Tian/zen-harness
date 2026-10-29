@@ -53,11 +53,7 @@ The daemon attaches to whatever Zen is listening for WebDriver BiDi on `port`, w
 
 The harness never decides these for you; set them to your preference. `zen-harness relaunch` does the restart on demand. Tabs come back through Zen's session restore, so keep "Open previous windows and tabs" on if you rely on that.
 
-To start Zen yourself with remote control on:
-
-```bash
-/Applications/Zen.app/Contents/MacOS/zen --remote-debugging-port 9222
-```
+To start Zen yourself with remote control on, run `zen-harness doctor`: it prints the exact command for your profile. That command includes `--marionette`, which lets the harness clean up its session even if it is force-killed. A Zen started with only `--remote-debugging-port` works too, without that protection.
 
 ## Configuration
 
@@ -70,6 +66,7 @@ profile = ""                  # name from profiles.ini, a directory, or "" for Z
 if_not_running = "launch"     # or "instruct"
 if_not_listening = "instruct" # or "relaunch"
 automation_prefs = "skip"     # or "apply"
+marionette_port = 0           # Marionette port when the harness starts Zen; 0 = any free port
 headless = false
 idle_timeout = 1800           # seconds without calls before the session is released; 0 = never
 workspace = "~/.zen-harness"
