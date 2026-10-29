@@ -1,0 +1,3 @@
+# `snapshot()` is computed by page JavaScript, not BiDi's accessibility locator
+
+Agents need a compact list of a page's controls (browser-harness reads Chrome's accessibility tree). BiDi's `browsingContext.locateNodes` with an `accessibility` locator hangs in Zen, and Firefox exposes no accessibility tree over BiDi. So `snapshot()` walks the DOM, including open shadow roots, in injected JS. It derives a role and accessible name for each visible interactive element and tags it with a `data-zh-ref` attribute. Every selector-taking helper accepts that ref (`"@e3"`). Iframes are not included. A GitHub repo page comes out at ~100 lines (~750 tokens) against ~58k tokens of HTML.

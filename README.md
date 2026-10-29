@@ -128,4 +128,4 @@ uv sync
 uv run pytest        # runs snippets against a headless Zen on a throwaway profile
 ```
 
-Design notes: [docs/DESIGN.md](docs/DESIGN.md).
+Design decisions: [docs/adr/](docs/adr/). Open work: [GitHub issues](https://github.com/Astatine-213-Tian/zen-harness/issues). Agent conventions: [AGENTS.md](AGENTS.md).

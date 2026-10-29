@@ -1,0 +1,3 @@
+# Profile and restart policy belong to the user, not the harness
+
+The harness attaches to whatever Zen is listening on its port, whichever profile that is. It never decides on its own whether to restart someone's everyday browser. Every choice is a setting: `profile`; `if_not_running` = `launch | instruct`; `if_not_listening` = `instruct | relaunch`; `remote_mode` = `flags | runtime`. The defaults are the least disruptive options (print instructions rather than quit Zen). A user's preference, such as "use my main profile and restart Zen without asking", goes in their agent instructions or config file, not in the package.
