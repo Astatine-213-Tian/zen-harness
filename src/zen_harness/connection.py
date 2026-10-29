@@ -5,6 +5,8 @@ profile that is. `profile` only matters when Zen has to be (re)started.
 """
 import configparser
 import http.client
+import json
+import os
 import shlex
 import socket
 import subprocess
@@ -15,6 +17,9 @@ from .config import Config
 
 BUNDLE_ID = "app.zen-browser.zen"
 PREF_LINE = 'user_pref("remote.prefs.recommended", false);'
+# Prefs Firefox applies over the profile's when started with --marionette. A busy marionette.port
+# makes Zen quit at startup, so launches ask for `marionette_port` (default 0: any free port).
+MARIONETTE_PREFS_ENV = "MOZ_MARIONETTE_PREF_STATE_ACROSS_RESTARTS"
 
 
 class ConnectError(RuntimeError):
@@ -94,13 +99,56 @@ def _profile_of(pid: int):
     return None
 
 
+def read_active_port(profile):
+    """The port Marionette wrote to the profile's MarionetteActivePort file at startup, or None."""
+    try:
+        text = (Path(profile) / "MarionetteActivePort").read_text().strip()
+    except OSError:
+        return None
+    return int(text) if text.isdigit() and 0 < int(text) < 65536 else None
+
+
+def parse_lsof_ports(text):
+    """Ports from `lsof -Fn` output lines such as `n127.0.0.1:2828`."""
+    return {int(line.rsplit(":", 1)[1]) for line in text.splitlines()
+            if line.startswith("n") and line.rsplit(":", 1)[-1].isdigit()}
+
+
+def marionette_port(cfg: Config):
+    """Marionette port of the Zen listening on `cfg.port`, or None if it runs without --marionette."""
+    out = subprocess.run(["lsof", "-nP", f"-iTCP:{cfg.port}", "-sTCP:LISTEN", "-t"],
+                         capture_output=True, text=True).stdout.split()
+    if not out:
+        return None
+    pid = int(out[0])
+    profile = _profile_of(pid)
+    port = read_active_port(profile) if profile else None
+    if port is None:
+        return None
+    # The file outlives a crash, so only trust it if that same process listens there.
+    listening = subprocess.run(["lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+                               capture_output=True, text=True).stdout
+    return port if port in parse_lsof_ports(listening) else None
+
+
 def _same(a, b) -> bool:
     return a is not None and Path(a).resolve() == Path(b).resolve()
 
 
 def start_command(cfg: Config, profile: Path) -> list:
-    cmd = [cfg.zen_path, "--profile", str(profile), "--remote-debugging-port", str(cfg.port)]
+    # --marionette lets the daemon own its session through a connection whose loss ends it.
+    cmd = [cfg.zen_path, "--profile", str(profile), "--remote-debugging-port", str(cfg.port), "--marionette"]
     return cmd + (["--headless"] if cfg.headless else [])
+
+
+def start_env(cfg: Config) -> dict:
+    return {MARIONETTE_PREFS_ENV: json.dumps({"marionette.port": cfg.marionette_port})}
+
+
+def start_shell(cfg: Config, profile: Path) -> str:
+    """start_command as a line to paste into a shell."""
+    env = " ".join(f"{k}={shlex.quote(v)}" for k, v in start_env(cfg).items())
+    return f"{env} {shlex.join(start_command(cfg, profile))}"
 
 
 def ensure_automation_prefs(cfg: Config, profile: Path):
@@ -119,11 +167,15 @@ def launch(cfg: Config, profile: Path, timeout=30.0) -> str:
     ensure_automation_prefs(cfg, profile)
     log = cfg.run_dir / "zen.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(start_command(cfg, profile), stdin=subprocess.DEVNULL,
+    subprocess.Popen(start_command(cfg, profile), env={**os.environ, **start_env(cfg)}, stdin=subprocess.DEVNULL,
                      stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
     deadline = time.time() + timeout
     while time.time() < deadline:
         if listener(cfg.port) == "bidi":
+            # Marionette starts alongside BiDi; give it a moment so the daemon can use it.
+            until = min(deadline, time.time() + 5)
+            while marionette_port(cfg) is None and time.time() < until:
+                time.sleep(0.25)
             return session_url(cfg)
         time.sleep(0.25)
     raise ConnectError(f"started Zen but it did not open port {cfg.port} within {timeout:.0f}s; see {log}")
@@ -171,8 +223,8 @@ def connect(cfg: Config) -> str:
             "    tabs come back through session restore)\n"
             "  - set if_not_listening = \"relaunch\" in ~/.config/zen-harness/config.toml\n"
             "  - quit Zen and start it yourself with:\n"
-            f"    {shlex.join(start_command(cfg, profile))}")
+            f"    {start_shell(cfg, profile)}")
     if cfg.if_not_running == "launch":
         return launch(cfg, profile)
     raise ConnectError("Zen is not running with remote control. Start it with:\n"
-                       f"  {shlex.join(start_command(cfg, profile))}")
+                       f"  {start_shell(cfg, profile)}")

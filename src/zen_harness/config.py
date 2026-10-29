@@ -16,6 +16,7 @@ CHOICES = {
 @dataclass(frozen=True)
 class Config:
     port: int = 9222
+    marionette_port: int = 0  # Marionette port when the harness starts Zen; 0 = any free port
     profile: str = ""  # profile name or path; empty = Zen's default profile
     zen_path: str = "/Applications/Zen.app/Contents/MacOS/zen"
     zen_data_dir: str = str(Path.home() / "Library/Application Support/zen")

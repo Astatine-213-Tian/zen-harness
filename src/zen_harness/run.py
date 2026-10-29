@@ -1,6 +1,5 @@
 """zen-harness CLI: run a Python snippet from stdin with the helpers pre-imported."""
 import importlib.util
-import shlex
 import sys
 import traceback
 from importlib import resources
@@ -57,6 +56,13 @@ def run_snippet(code):
     return 0
 
 
+SESSION_MODES = {
+    "marionette": "session via Marionette (ends even if the daemon is force-killed)",
+    "bidi": "session is BiDi-only (a force-killed daemon locks Zen until it restarts; "
+            "`zen-harness relaunch` adds --marionette)",
+}
+
+
 def doctor(cfg):
     print(f"zen-harness {__version__}")
     print(f"config file: {config.CONFIG_FILE} ({'found' if config.CONFIG_FILE.is_file() else 'not found, using defaults'})")
@@ -74,12 +80,19 @@ def doctor(cfg):
         print(f"  pid {pid}: {prof}")
     kind = connection.listener(cfg.port)
     print(f"port {cfg.port}: {({'bidi': 'Zen/Firefox remote control (BiDi)', 'cdp': 'held by a Chromium browser'}).get(kind, 'nothing listening')}")
+    if kind == "bidi":
+        mport = connection.marionette_port(cfg)
+        print(f"marionette: {f'port {mport}' if mport else 'off (Zen was started without --marionette)'}")
     alive = ipc.daemon_alive(cfg)
-    print(f"session daemon: {'running' if alive else 'not running'}")
     if alive:
+        mode = ipc.send(cfg, {"meta": "ping"}).get("mode")
+        print(f"session daemon: running; {SESSION_MODES.get(mode, 'session kind unknown')}")
         print(f"controlled tab: {ipc.send(cfg, {'meta': 'current'})['context'] or '(none yet)'}")
+    else:
+        print("session daemon: not running"
+              + (f"; next {SESSION_MODES['marionette' if mport else 'bidi']}" if kind == "bidi" else ""))
     if profile and not kind:
-        print(f"start command: {shlex.join(connection.start_command(cfg, profile))}")
+        print(f"start command: {connection.start_shell(cfg, profile)}")
     return 0
 
 

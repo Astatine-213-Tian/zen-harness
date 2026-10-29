@@ -4,7 +4,7 @@ import signal
 import subprocess
 import time
 
-from conftest import FIXTURE
+from conftest import FIXTURE, daemon_pids
 
 
 def value(out):
@@ -116,8 +116,9 @@ def test_events_and_network_idle(page):
 
 
 def test_terminated_daemon_releases_the_session(page):
-    pids = subprocess.run(["pgrep", "-f", "zen_harness.daemon"], capture_output=True, text=True).stdout.split()
+    pids = daemon_pids()
+    assert pids
     for p in pids:
-        os.kill(int(p), signal.SIGTERM)
+        os.kill(p, signal.SIGTERM)
     time.sleep(1.5)
     assert page("print(js('1 + 1'))") == "2"
