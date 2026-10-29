@@ -144,3 +144,22 @@ Plain files under `~/.zen-harness` (independent of any other tool):
 - **Input or JS that opens a dialog blocks until the dialog closes.** The daemon answers such pending calls as soon as `userPromptOpened` arrives, so `page_info()` can show the dialog and `handle_dialog()` can answer it.
 - **Wheel input is ignored in background tabs.** `scroll()` falls back to scrolling the nearest scrollable element under the point via JS.
 - **The `accessibility` locator in `browsingContext.locateNodes` hangs** in Zen; not used.
+
+## Hiding automation: research (not built yet)
+
+Question: can the harness control the main profile without Firefox's automation flag (`navigator.webdriver = true`)?
+
+- **What sets the flag.** `navigator.webdriver` is true only while Marionette or the Remote Agent reports `isBrowserAutomationRunning`. No pref controls it. The `--remote-debugging-port` and `--marionette` flags start them in automation mode. Firefox's dynamic start (`startAtRuntime({isBrowserAutomation: false})`) does not, and it also skips the recommended prefs. Measured: `navigator.webdriver === false` with the native getter.
+- **Nothing in Zen 1.23.4b calls dynamic start.** There is no button, flag, policy or auto-start pref.
+- **Ways to call it without modifying the app:**
+  1. A Browser Console one-liner (needs `devtools.chrome.enabled`):
+     `ChromeUtils.importESModule("moz-src:///browser/components/remotecontrol/RemoteControlServers.sys.mjs").RemoteControlServers.start()`.
+  2. Automatable (verified on a throwaway profile): with `devtools.chrome.enabled` and `devtools.debugger.remote-enabled`, run `zen --profile <P> --start-debugger-server <port>`. This is forwarded to the already-running Zen and opens a DevTools (RDP) server inside it. Through that server the harness can evaluate `RemoteAgent.startAtRuntime({isBrowserAutomation:false})` (plus Marionette's, for the kill -9 protection), then attach over BiDi as today.
+- **Costs of dynamic start:**
+  - The port is hard-coded to 9222. If it is busy, Firefox force-quits the whole browser after 5 s, so check that it's free first.
+  - An "Allow remote control?" prompt appears on each new session. `remote.experimental.dynamicstart.prompt.enabled=false` turns it off.
+  - Banners appear in the browser; they have prefs too.
+  - The user sees a robot icon and a red-striped URL bar (sites don't).
+  - Firefox plans to confine such sessions to a separate container (Bug 2072964). If that lands, sessions would lose the user's logins.
+- **The DevTools route's security cost:** a DevTools server gives chrome-level control of the browser to anything that connects. Keep `devtools.debugger.prompt-connection=true` (the user clicks Allow), or listen on a 0700 Unix socket.
+- **Cheaper partial fix:** a BiDi preload script redefining `Navigator.prototype.webdriver` reports false in pages and same-origin iframes. It is detectable via the getter's `toString()` and misses tabs loaded before the session.
