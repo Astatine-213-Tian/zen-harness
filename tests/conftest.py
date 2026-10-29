@@ -11,7 +11,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = (ROOT / "tests/fixtures/page.html").as_uri()
-PORT = "9345"
+# Override to run several test sessions side by side.
+PORT = os.environ.get("ZH_TEST_PORT", "9345")
 
 
 @pytest.fixture(scope="session")
