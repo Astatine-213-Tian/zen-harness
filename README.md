@@ -24,16 +24,20 @@ PY
 
 ## Install
 
-Requires macOS, [Zen](https://zen-browser.app), Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+**Easiest: let your agent do it.** Paste this into Claude Code, Codex or any coding agent:
+
+```text
+Set up zen-harness for me: follow https://raw.githubusercontent.com/Astatine-213-Tian/zen-harness/main/install.md
+```
+
+The agent checks your machine, installs the CLI and its skill, asks you two preferences (which Zen profile, and whether it may restart Zen on its own), saves them to its instructions, and runs a read-only test. The steps are in [install.md](install.md) if you want to read them first.
+
+**By hand.** Requires macOS, [Zen](https://zen-browser.app), Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv tool install git+https://github.com/Astatine-213-Tian/zen-harness
-```
-
-Give Claude Code the skill, so it knows when and how to use it:
-
-```bash
 mkdir -p ~/.claude/skills/zen-harness && zen-harness skill > ~/.claude/skills/zen-harness/SKILL.md
+zen-harness doctor
 ```
 
 Then ask your agent for a browser task. The first call connects to Zen (see [How it connects](#how-it-connects)).
