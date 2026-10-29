@@ -84,9 +84,10 @@ def _value(rv):
     return {"type": t}
 
 
-def _evaluate(expression, ctx):
+def _evaluate(expression, ctx, passive=False):
+    """passive=True: a read that can't navigate, so wait_for_load needn't watch for one."""
     r = bidi("script.evaluate", expression=expression, target={"context": ctx}, awaitPromise=True,
-             resultOwnership="none", userActivation=True,
+             resultOwnership="none", userActivation=True, zh_passive=passive,
              serializationOptions={"maxObjectDepth": 20, "maxDomDepth": 0})
     if r.get("type") == "exception":
         d = r.get("exceptionDetails", {})
@@ -94,17 +95,19 @@ def _evaluate(expression, ctx):
     return _value(r["result"])
 
 
-def js(expression, target_id=None):
-    """Run JS in the controlled tab (or an iframe from iframe_target()) and return the value.
+def js(expression, target_id=None, _passive=False):
+    """Run JS in the controlled tab (or an iframe from iframe_target()) and return the value
+    of its last statement.
 
-    Plain expressions work as-is; snippets with a top-level `return` or `await`
-    are retried inside an async function."""
+    The snippet runs in its own block, so `const`/`let`/`class` stay local to the call
+    (share values between calls through `window.x`). Snippets with a top-level `return`
+    or `await` are retried inside an async function; there, only `return` gives a value."""
     ctx = target_id or _ctx()
     try:
-        return _evaluate(expression, ctx)
+        return _evaluate(f"{{\n{expression}\n}}", ctx, passive=_passive)
     except RuntimeError as e:
         if "return not in function" in str(e) or "await is only valid" in str(e):
-            return _evaluate(f"(async () => {{\n{expression}\n}})()", ctx)
+            return _evaluate(f"(async () => {{\n{expression}\n}})()", ctx, passive=_passive)
         raise
 
 
@@ -212,7 +215,8 @@ def snapshot(query=None, within=None, limit=150, hrefs=False):
     query: keep elements whose role or name (plus link href, with hrefs=True) contains this text.
     within: CSS selector to limit the snapshot to one part of the page.
     hrefs: append link targets. Open shadow roots are included; iframes are not."""
-    r = js(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},{json.dumps(bool(hrefs))})")
+    r = js(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},{json.dumps(bool(hrefs))})",
+           _passive=True)
     lines = [f'@{ref} {role} {json.dumps(name, ensure_ascii=False)}' + (f" {extra}" if extra else "")
              for ref, role, name, extra in r["items"]]
     if r["total"] > len(lines):
@@ -246,7 +250,7 @@ def page_info():
         return {"dialog": dialog}
     return _evaluate("({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,"
                      "sy:scrollY,pw:document.documentElement.scrollWidth,"
-                     "ph:document.documentElement.scrollHeight})", ctx)
+                     "ph:document.documentElement.scrollHeight})", ctx, passive=True)
 
 
 def handle_dialog(accept=True, text=None):
@@ -350,7 +354,7 @@ def dispatch_key(selector, key="Enter", event="keypress"):
 def scroll(x, y, dy=-300, dx=0):
     """Scroll whatever is under (x, y). Positive dy scrolls down."""
     ctx = _ctx()
-    if _evaluate("document.visibilityState", ctx) == "visible":
+    if _evaluate("document.visibilityState", ctx, passive=True) == "visible":
         _perform(ctx, {"type": "wheel", "id": "wheel", "actions": [
             {"type": "scroll", "x": round(x), "y": round(y), "deltaX": dx, "deltaY": dy}]})
         return
@@ -424,7 +428,7 @@ def _mark(ctx):
     if CFG.tab_marker:
         m = json.dumps(CFG.tab_marker + " ")
         try:
-            _evaluate(f"if(!document.title.startsWith({m}))document.title={m}+document.title", ctx)
+            _evaluate(f"if(!document.title.startsWith({m}))document.title={m}+document.title", ctx, passive=True)
         except Exception:
             pass
 
@@ -433,7 +437,7 @@ def _unmark(ctx):
     if CFG.tab_marker and ctx:
         m = json.dumps(CFG.tab_marker + " ")
         try:
-            _evaluate(f"if(document.title.startsWith({m}))document.title=document.title.slice({m}.length)", ctx)
+            _evaluate(f"if(document.title.startsWith({m}))document.title=document.title.slice({m}.length)", ctx, passive=True)
         except Exception:
             pass
 
@@ -488,7 +492,7 @@ def ensure_real_tab():
             return _tab(cur, c["url"])
     for c in tabs:
         try:
-            r = bidi("script.evaluate", expression="document.visibilityState", awaitPromise=False,
+            r = bidi("script.evaluate", expression="document.visibilityState", awaitPromise=False, zh_passive=True,
                      target={"context": c["context"]}, _timeout=1.0)
         except Exception:
             continue
@@ -519,33 +523,53 @@ def wait(seconds=1.0):
     time.sleep(seconds)
 
 
+# How long after a click/js() a navigation may take to start before we treat the page as staying.
+_NAVIGATION_GRACE_MS = 300
+
+
+def _settled(ctx, need_load):
+    """False while the controlled tab is (maybe about to be) navigating away.
+
+    need_load=True waits for the new page's load event; False only for its document
+    to be in place (enough to look for elements)."""
+    s = _send({"meta": "load_state", "context": ctx})
+    if s["navigating"] and (need_load or not s["committed"]):
+        return False
+    quiet = s["since_cause_ms"] is None or s["since_cause_ms"] >= _NAVIGATION_GRACE_MS
+    return s["navigated_since_cause"] or quiet
+
+
 def wait_for_load(timeout=15.0):
-    """Poll document.readyState == 'complete' or timeout."""
+    """Wait until the controlled tab has finished loading. After a click or js() that
+    navigates, this waits for the new page rather than returning on the old one."""
+    ctx = _ctx()
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            if js("document.readyState") == "complete":
+            if _settled(ctx, need_load=True) and js("document.readyState", _passive=True) == "complete":
                 return True
         except RuntimeError:
             pass  # mid-navigation
-        time.sleep(0.2)
+        time.sleep(0.05)
     return False
 
 
 def wait_for_element(selector, timeout=10.0, visible=False):
-    """Poll until querySelector(selector) exists (and is visible if asked). True if found."""
+    """Poll until querySelector(selector) exists (and is visible if asked). True if found.
+    Like wait_for_load, it looks at the new page when the last action navigated."""
     check = (f"(()=>{{const e={_q(selector)};if(!e)return false;"
              + ("const r=e.getBoundingClientRect();const s=getComputedStyle(e);"
                 "return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';"
                 if visible else "return true;") + "})()")
+    ctx = _ctx()
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            if js(check):
+            if _settled(ctx, need_load=False) and js(check, _passive=True):
                 return True
         except RuntimeError:
             pass
-        time.sleep(0.2)
+        time.sleep(0.1)
     return False
 
 

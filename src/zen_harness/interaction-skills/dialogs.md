@@ -22,11 +22,10 @@ if "dialog" in info:
 Pages with unsaved input arm it. `goto_url` returns as soon as the prompt appears; answer it, then wait for the new page:
 
 ```python
-js("document.documentElement.dataset.zhOld = '1'")   # mark the page you're leaving
 goto_url("https://example.com/")
 if page_info().get("dialog", {}).get("type") == "beforeunload":
     handle_dialog(accept=True)   # leave; accept=False stays and keeps the draft
-wait_for_element("html:not([data-zh-old])", timeout=15)   # the next page has arrived
+wait_for_load()                  # the next page (or, if you stayed, the current one)
 ```
 
 `close_tab()` closes without asking. If the input is the user's own unsaved work, ask before discarding it.

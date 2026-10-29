@@ -24,7 +24,7 @@ click_at_xy(box["x"], box["y"])
 
 Or walk the path when you know it: `js("document.querySelector('star-card').shadowRoot.querySelector('#q').placeholder")`.
 
-(`DEEP` is a function declaration on purpose: a top-level `const` in `js()` stays declared in the page, so the second call would fail with "redeclaration". See `zen-harness notes js`.)
+(Prepend `DEEP` to any snippet that needs it; each `js()` call runs in its own block, see `zen-harness notes js`.)
 
 Typing into a shadow input: focus it in JS, then type real keys (framework listeners see normal input events):
 

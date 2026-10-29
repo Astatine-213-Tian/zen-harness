@@ -47,6 +47,10 @@ class Handler(SimpleHTTPRequestHandler):
             n = int(q.get("page", 1))
             return self._send(json.dumps({"page": n, "items": [f"item {n}.{i}" for i in range(3)],
                                           "cookie": self.headers.get("Cookie", "")}), "application/json")
+        if url.path == "/slow.html":  # a page whose response takes ?ms= to arrive
+            time.sleep(int(q.get("ms", 800)) / 1000)
+            return self._send("<!doctype html><title>Slow page</title><h1 id='slow'>Slow page</h1>"
+                              "<a id='back' href='/tabs.html'>back</a>", "text/html")
         if url.path == "/report.csv":  # a server-side download
             return self._send("id,name\n1,Toronto\n", "text/csv",
                               [("Content-Disposition", 'attachment; filename="report.csv"')])

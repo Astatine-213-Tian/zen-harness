@@ -31,7 +31,15 @@ EVENTS = [
     "browsingContext.load", "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
     "log.entryAdded", "network.beforeRequestSent", "network.responseCompleted", "network.fetchError",
     "browsingContext.downloadWillBegin", "browsingContext.downloadEnd",
+    # navigationAborted is not supported by Zen; subscribing to it would fail the whole list.
+    "browsingContext.navigationStarted", "browsingContext.navigationCommitted",
+    "browsingContext.navigationFailed", "browsingContext.fragmentNavigated",
 ]
+
+# Calls that may start a navigation. wait_for_load gives one a moment to begin; reads that
+# can't navigate send params["zh_passive"] = True so they don't count.
+NAVIGATION_CAUSES = ("input.performActions", "script.evaluate", "script.callFunction",
+                     "browsingContext.navigate", "browsingContext.reload", "browsingContext.traverseHistory")
 
 
 BLOCKED_BY_DIALOG = ("input.performActions", "script.evaluate", "script.callFunction",
@@ -123,6 +131,9 @@ class Session:
         self.lock = threading.Lock()
         self.events = collections.deque(maxlen=500)
         self.dialogs = {}  # context -> prompt params
+        self.navigating = {}  # context -> [id, committed?] of its started, not yet loaded navigation
+        self.last_cause = {}  # context -> monotonic time of the last call that may navigate
+        self.last_nav = {}  # context -> monotonic time its last navigation started
         self.inflight = {}  # request id -> context
         self.last_network = {}  # context -> monotonic time of its last network event
         self.started = time.monotonic()
@@ -144,7 +155,8 @@ class Session:
 
     def call(self, method, params=None, timeout=30.0):
         msg_id = next(self.ids)
-        p = params or {}
+        p = dict(params or {})
+        passive = p.pop("zh_passive", False)
         slot = {"done": threading.Event(), "method": method,
                 "context": p.get("context") or p.get("target", {}).get("context")}
         if method == "input.performActions" and slot["context"] in self.dialogs:
@@ -152,9 +164,11 @@ class Session:
             d = self.dialogs[slot["context"]]
             raise BiDiError(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
                             "answer it with handle_dialog() first")
+        if method in NAVIGATION_CAUSES and not passive and slot["context"]:
+            self.last_cause[slot["context"]] = time.monotonic()
         self.pending[msg_id] = slot
         with self.lock:
-            self.ws.send(json.dumps({"id": msg_id, "method": method, "params": params or {}}))
+            self.ws.send(json.dumps({"id": msg_id, "method": method, "params": p}))
         if not slot["done"].wait(timeout):
             self.pending.pop(msg_id, None)
             raise TimeoutError(f"{method} got no answer within {timeout:g}s")
@@ -182,6 +196,7 @@ class Session:
 
     def _on_event(self, method, p):
         ctx = p.get("context")
+        self._track_navigation(method, ctx, p)
         if method.startswith("network."):
             req = p.get("request", {})
             self.last_network[ctx] = time.monotonic()
@@ -220,6 +235,33 @@ class Session:
             summary = {"url": p.get("url")}
         self.events.append({"event": method, "context": ctx, "time": time.time(), **summary})
 
+    def _track_navigation(self, method, ctx, p):
+        nav = p.get("navigation")
+        if method == "browsingContext.navigationStarted":
+            # One navigation at a time per tab: a new one supersedes (aborts) the last.
+            self.navigating[ctx] = [nav, False]
+            self.last_nav[ctx] = time.monotonic()
+        elif method == "browsingContext.navigationCommitted":
+            if self.navigating.get(ctx, [None])[0] == nav:
+                self.navigating[ctx][1] = True  # the new document is in place
+        elif method in ("browsingContext.load", "browsingContext.navigationFailed",
+                        "browsingContext.fragmentNavigated", "browsingContext.downloadWillBegin"):
+            if nav is None or self.navigating.get(ctx, [None])[0] == nav:
+                self.navigating.pop(ctx, None)
+        elif method == "browsingContext.userPromptClosed" and p.get("type") == "beforeunload" and not p.get("accepted"):
+            self.navigating.pop(ctx, None)  # the user chose to stay
+        elif method == "browsingContext.contextDestroyed":
+            for d in (self.navigating, self.last_cause, self.last_nav):
+                d.pop(ctx, None)
+
+    def load_state(self, ctx):
+        now = time.monotonic()
+        cause, nav = self.last_cause.get(ctx), self.last_nav.get(ctx)
+        return {"navigating": ctx in self.navigating,
+                "committed": self.navigating.get(ctx, [None, True])[1],
+                "since_cause_ms": None if cause is None else int((now - cause) * 1000),
+                "navigated_since_cause": cause is not None and nav is not None and nav >= cause}
+
     def titles(self, contexts, timeout=1.5):
         """document.title of each context, queried in parallel; '' if a tab doesn't answer."""
         out = dict.fromkeys(contexts, "")
@@ -227,7 +269,8 @@ class Session:
         def one(ctx):
             try:
                 r = self.call("script.evaluate", {"expression": "document.title", "awaitPromise": False,
-                                                  "target": {"context": ctx}}, timeout=timeout)
+                                                  "target": {"context": ctx}, "zh_passive": True},
+                              timeout=timeout)
                 out[ctx] = r.get("result", {}).get("value", "")
             except Exception:
                 pass
@@ -248,6 +291,8 @@ class Session:
         if op == "set_current":
             self.current = req["context"]
             return {"context": self.current}
+        if op == "load_state":
+            return self.load_state(req.get("context") or self.current)
         if op == "dialog":
             return {"dialog": self.dialogs.get(req.get("context") or self.current)}
         if op == "network":
@@ -296,6 +341,15 @@ def bind(cfg):
 
 def serve(cfg, session, server):
     path = sock_path(cfg)
+    inode = path.stat().st_ino
+
+    def unlink_own():
+        # After stop, a new daemon may already listen at this path; only remove our own socket.
+        try:
+            if path.stat().st_ino == inode:
+                path.unlink()
+        except FileNotFoundError:
+            pass
     state = {"last": time.monotonic(), "stop": False}
 
     # A session left open would lock Zen until it restarts, so end it on any catchable exit.
@@ -316,7 +370,7 @@ def serve(cfg, session, server):
             try:
                 if req.get("meta") == "stop":
                     state["stop"] = True
-                    path.unlink(missing_ok=True)
+                    unlink_own()
                     session.close()
                     resp = {"ok": True}
                 elif "meta" in req:
@@ -346,7 +400,7 @@ def serve(cfg, session, server):
         for t in handlers:  # let in-flight replies (e.g. to stop) reach their clients
             t.join(timeout=2)
         server.close()
-        path.unlink(missing_ok=True)
+        unlink_own()
         session.close()
 
 

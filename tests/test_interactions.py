@@ -60,10 +60,9 @@ def test_notes_are_short_and_titled():
 
 # --- js ---
 
-def test_js_top_level_const_persists_but_return_and_blocks_do_not(at):
+def test_js_const_stays_local_and_await_needs_return(at):
     zh = at("tabs.html")
-    zh("js('const zhOnce = 1')")
-    assert "redeclaration of const zhOnce" in zh("js('const zhOnce = 2')", check=False).stderr
+    assert zh("print(js('const zhOnce = 1; zhOnce')); print(js('const zhOnce = 2; zhOnce'))") == "1\n2"
     assert zh("print(js('const t = 6 * 7; return t')); print(js('const t = 6 * 7; return t'))") == "42\n42"
     assert zh("print(js('{ const t = 1; t }')); print(js('{ const t = 2; t }'))") == "1\n2"
     assert zh("print(js('await Promise.resolve(5)'))") == "None"

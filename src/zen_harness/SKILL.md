@@ -27,13 +27,13 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 - Wait: `wait_for_load()`, `wait_for_element(selector, timeout=10, visible=False)`, `wait_for_network_idle()`, `wait(seconds)`
 - Other: `iframe_target(url_substr)` (pass to `js(..., target_id=...)`), `drain_events()` (console logs, finished requests, dialogs), `http_get(url)`, `bidi(method, **params)` (raw WebDriver BiDi)
 
-`js()` returns plain Python values. A top-level `return` or `await` works.
+`js()` returns the value of the last statement as plain Python. Each call runs in its own block, so `const`/`let` stay local; keep state on `window`. A top-level `return` or `await` works (with `await`, use `return` to get a value).
 
 ## Working on a page
 
 - First navigation is `new_tab(url)`. It opens a background tab, so the user's visible tab stays put. Call `activate_tab(...)` only when the user asks to see it, or when a page stalls while hidden.
 - The controlled tab's title starts with 🐴 so the user can see which tab you hold.
-- After a navigation or a click that loads a page, call `wait_for_load()` (or `wait_for_element(...)` for single-page apps).
+- After a navigation or a click that loads a page, call `wait_for_load()`; it waits for the new page, not the one you left. On single-page apps use `wait_for_element(...)`.
 - Find controls with `snapshot()` first: a whole GitHub repo page is ~100 lines (~750 tokens). Narrow it with `snapshot("star")` or `snapshot(within="form")`, then act on the ref: `click("@e3")`, `fill_input("@e7", "Toronto")`. Refs last until the next `snapshot()` or navigation, so snapshot again after the page changes.
 - For text and data (prices, lists, tables) use `js(...)` and print only what you need. Do not print whole pages.
 - Use `click_at_xy` for canvas or odd widgets: get coordinates from `getBoundingClientRect()` in `js`, or from a screenshot. `snapshot()` does not look inside iframes; use `iframe_target` + `js` there. (BiDi's accessibility locator hangs in Zen; don't use it.)

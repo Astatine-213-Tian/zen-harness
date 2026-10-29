@@ -19,14 +19,12 @@ print(js("await Promise.resolve(5)"))          # None
 print(js("return await Promise.resolve(5)"))   # 5
 ```
 
-## Top-level `const` / `let` stay declared
+## Declarations are local to each call
 
-A snippet without `return` runs as a global script, so `const e = ...` lives on in the page, and the next call declaring `e` fails with `SyntaxError: redeclaration of const e`. Any of these avoid it:
+Each `js()` call runs in its own block, so `const`, `let` and `class` don't leak into the page: running `js("const e = 1; e")` twice is fine, and the last statement's value comes back.
 
 ```python
-print(js("const total = 6 * 7; return total"))      # has return: runs inside a function
-print(js("{ const total = 6 * 7; total }"))          # a block keeps it local; the last expression is the value
-print(js("(() => { const total = 6 * 7; return total; })()"))
+print(js("const total = 6 * 7; total"))   # 42, again and again
 ```
 
 Keep state you want across calls on `window` (`window.__zh_items = [...]`); it is lost when the page navigates.

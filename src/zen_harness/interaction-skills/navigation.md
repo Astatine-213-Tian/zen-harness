@@ -2,21 +2,15 @@
 
 Know when the next page is really there: after clicks that navigate, reloads, SPA route changes.
 
-## goto_url waits; clicks don't
+## Waiting after a click
 
-`goto_url(url)` returns once the new document is interactive. A click (or `js("location.href = ...")`) that navigates returns at once, and `wait_for_load()` right after it can see the **old** page, which is still `complete`. After `js("location.reload()")` on a fixture it returned in 2 ms with the old document 5 times out of 5, and the next `click` failed with `NS_ERROR_FAILURE`.
-
-Mark the old document, then wait for a document without the mark:
+`goto_url(url)` returns once the new document is interactive. After a click, `press_key("Enter")` or `js("location.href = ...")` that navigates, call `wait_for_load()`. It waits for the **new** page: the daemon watches each tab's navigation events and gives an action 300 ms to start a navigation before treating the page as staying put. `wait_for_element(...)` works the same way, so it won't match an element on the page you're leaving.
 
 ```python
-js("document.documentElement.dataset.zhOld = '1'")
 click("#next")
-wait_for_element("html:not([data-zh-old])", timeout=15)
 wait_for_load()
 print(page_info()["url"])
 ```
-
-Simpler when you know what the next page shows: `wait_for_element("<selector only the next page has>")`.
 
 ## Reload
 
@@ -32,16 +26,14 @@ Reloading keeps form state (a ticked checkbox stays ticked); use `goto_url(...)`
 
 ## Dialogs during navigation
 
-If a page shows `alert()` while loading, or a `beforeunload` "Leave page?" prompt when you navigate away, `goto_url` blocks for 60 s and then raises `browsingContext.navigate got no answer`. Navigate with JS instead, then check for a dialog:
+If a page shows `alert()` while loading, or a `beforeunload` "Leave page?" prompt when you navigate away, the navigation returns with the dialog open. Check for it, answer it, then wait:
 
 ```python
-js("document.documentElement.dataset.zhOld = '1'; location.href = 'https://example.com/'")
-wait(1)
+goto_url("https://example.com/")
 info = page_info()
 if "dialog" in info:
     print(info["dialog"])           # {'type': 'beforeunload', 'message': ...}
     handle_dialog(accept=True)      # accept=False stays on the page
-wait_for_element("html:not([data-zh-old])", timeout=15)
 wait_for_load()
 ```
 
