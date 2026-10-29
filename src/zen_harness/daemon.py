@@ -4,6 +4,10 @@ Zen accepts one session at a time and opening one costs ~300 ms (plus an
 "Allow remote control?" prompt in Remote Control mode), so the daemon keeps it
 open and serves helper calls over a Unix socket: one JSON line in, one out.
 It ends the session after `idle_timeout` seconds without calls.
+
+When Zen runs with --marionette, the session is created through Marionette, which
+ends it when the daemon's connection drops, even on `kill -9`. Otherwise it is a
+BiDi-only session that Zen keeps until it restarts if the daemon dies uncleanly.
 """
 import collections
 import itertools
@@ -19,8 +23,9 @@ from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from . import config, connection
+from . import config, connection, marionette
 
+CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
 EVENTS = [
     "browsingContext.contextCreated", "browsingContext.contextDestroyed",
     "browsingContext.load", "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
@@ -42,7 +47,11 @@ def err_path(cfg):
 
 def open_session(cfg):
     try:
-        return Session(connection.connect(cfg))
+        url = connection.connect(cfg)
+        client = marionette_session(cfg)
+        if client:
+            return Session(client.ws_url, marionette=client)
+        return Session(url)
     except BiDiError as e:
         if "Maximum number of active sessions" not in str(e):
             raise
@@ -57,9 +66,52 @@ class BiDiError(RuntimeError):
     pass
 
 
+def session_free(cfg):
+    """True if Zen has no WebDriver session open (BiDi session.status)."""
+    with ws_connect(connection.session_url(cfg), open_timeout=10) as ws:
+        ws.send(json.dumps({"id": 1, "method": "session.status", "params": {}}))
+        return bool(json.loads(ws.recv(10)).get("result", {}).get("ready"))
+
+
+def marionette_session(cfg, timeout=60.0):
+    """A Marionette client holding a new session with BiDi on, or None to fall back to BiDi-only.
+
+    Marionette deletes its session when this connection drops, even on kill -9.
+    """
+    port = connection.marionette_port(cfg)
+    if not port:
+        return None
+    # Closing any Marionette connection deletes the open session, even another tool's,
+    # so only connect when there is none.
+    if not session_free(cfg):
+        raise BiDiError("session not created: Maximum number of active sessions")
+    try:
+        client = marionette.Client(port)
+    except (OSError, EOFError, ValueError, marionette.MarionetteError):
+        return None
+    try:
+        result = client.command("WebDriver:NewSession", {"webSocketUrl": True, **CAPABILITIES}, timeout=timeout)
+        client.ws_url = result.get("capabilities", {}).get("webSocketUrl")
+        client.session_id = result.get("sessionId")
+        if not client.ws_url:
+            raise marionette.MarionetteError("Zen made a Marionette session without WebDriver BiDi")
+    except Exception as e:
+        client.close()
+        raise BiDiError(str(e)) from e
+    return client
+
+
 class Session:
-    def __init__(self, url, session_timeout=60.0):
-        self.ws = ws_connect(url, max_size=None, open_timeout=10, ping_interval=None)
+    def __init__(self, url, session_timeout=60.0, marionette=None):
+        """Attach to the BiDi session at `url`; without a `marionette` client holding one, create it."""
+        self.marionette = marionette
+        self.mode = "marionette" if marionette else "bidi"
+        try:
+            self.ws = ws_connect(url, max_size=None, open_timeout=10, ping_interval=None)
+        except Exception:
+            if marionette:
+                marionette.close()
+            raise
         self.ids = itertools.count(1)
         self.pending = {}
         self.lock = threading.Lock()
@@ -72,11 +124,16 @@ class Session:
         self.closed = threading.Event()
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            self.id = self.call("session.new", {"capabilities": {"alwaysMatch": {
-                "unhandledPromptBehavior": {"default": "ignore"}}}}, timeout=session_timeout)["sessionId"]
+            if marionette:
+                self.id = marionette.session_id
+            else:
+                self.id = self.call("session.new", {"capabilities": {"alwaysMatch": CAPABILITIES}},
+                                    timeout=session_timeout)["sessionId"]
             self.call("session.subscribe", {"events": EVENTS})
         except Exception:
             self.ws.close()
+            if marionette:
+                marionette.close()
             raise
 
     def call(self, method, params=None, timeout=30.0):
@@ -172,7 +229,7 @@ class Session:
     def meta(self, req):
         op = req["meta"]
         if op == "ping":
-            return {"ok": True}
+            return {"ok": True, "mode": self.mode}
         if op == "current":
             return {"context": self.current}
         if op == "set_current":
@@ -196,10 +253,16 @@ class Session:
 
     def close(self):
         try:
-            self.call("session.end", timeout=3)
+            if self.marionette:
+                # BiDi's session.end refuses sessions made through WebDriver classic.
+                self.marionette.command("WebDriver:DeleteSession", timeout=3)
+            else:
+                self.call("session.end", timeout=3)
         except Exception:
             pass
         try:
+            if self.marionette:
+                self.marionette.close()
             self.ws.close()
         except Exception:
             pass
