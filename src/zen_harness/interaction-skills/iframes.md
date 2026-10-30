@@ -1,6 +1,6 @@
 # iframes
 
-Run JS inside frames with iframe_target(); click and type in cross-origin frames through the frame's own context.
+snapshot() lists controls inside iframes with frame refs (@f1e2) that click/fill_input route to the frame; iframe_target() + js() for everything else.
 
 Each iframe is its own browsing context. `iframe_target(url_substr)` returns the first frame (nested frames included) whose URL contains the text; `js(..., target_id=frame)` runs there, same-origin or not.
 
@@ -16,11 +16,25 @@ From the parent page a cross-origin frame's `contentDocument` is `null`; use `ta
 
 ## Clicking and typing
 
-`click(selector)`, `fill_input` and `wait_for_element` only look at the top document.
+`snapshot()` lists visible iframes (same- or cross-origin, nested) after the top document, each under a header line, with refs that carry the frame number:
 
-**Same-origin frame:** `click_at_xy` at the iframe's box (`getBoundingClientRect()` plus `clientLeft`/`clientTop`, from the parent) plus the element's box (from `js(..., target_id=frame)`). Then `type_text` reaches the focused element inside it.
+```
+@e1 button "Top"
+# frame f1 http://localhost:8771/frame-inner.html?cross=1
+@f1e1 textbox "Code"
+@f1e2 button "OK"
+```
 
-**Cross-origin frame:** clicks at top-level coordinates do not reach it (verified in a headless background tab: no events fired), and `type_text` keys stay in the top document. Send input to the frame's own context, with coordinates inside the frame:
+```python
+snapshot()
+fill_input("@f1e1", "42")
+click("@f1e2")
+print(js("document.querySelector('#out').textContent", target_id=iframe_target("cross=1")))
+```
+
+`click`, `fill_input`, `wait_for_element`, `dispatch_key` and `upload_file` take frame refs: the lookup runs in the frame's own context and pointer and key input is sent to that context with frame coordinates. `query=` and `limit=` count across frames; `within=` is a CSS selector in the top document and keeps only the frames inside it. Frames are numbered per snapshot (a `query=` can renumber them), so use refs from the latest one. Hidden or 0×0 frames are skipped. CSS selectors, `type_text`, `press_key` and `click_at_xy` still act on the top document: to type into a frame, use `fill_input` with a frame ref. Closed shadow roots stay invisible, in frames as everywhere. Input sent to a frame isn't tracked as a possible navigation of the tab, so if a frame click navigates the whole tab, wait for something on the new page with `wait_for_element(...)` rather than relying on `wait_for_load()` alone.
+
+**Without a snapshot ref:** clicks at top-level coordinates do not reach a cross-origin frame (verified in a headless background tab: no events fired), and `type_text` keys stay in the top document. Send input to the frame's own context, with coordinates inside the frame:
 
 ```python
 frame = iframe_target("localhost")

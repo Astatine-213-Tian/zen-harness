@@ -10,6 +10,7 @@ import json
 import math
 import mimetypes
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -79,6 +80,8 @@ def _value(rv):
         return f"/{v['pattern']}/{v.get('flags', '')}"
     if t == "node":
         return {"node": (v or {}).get("localName") or (v or {}).get("nodeName"), "sharedId": rv.get("sharedId")}
+    if t == "window":  # a frame's window: its context id works as js(..., target_id=...)
+        return {"type": t, "context": (v or {}).get("context")}
     if t in ("string", "boolean", "date"):
         return v
     return {"type": t}
@@ -118,7 +121,7 @@ _DEEP = ("((s)=>{const f=r=>{let e=r.querySelector(s);if(e)return e;"
 
 
 def _ref_css(selector):
-    """'@e3' -> the CSS for that snapshot ref; anything else is already CSS."""
+    """'@e3' / '@f1e3' -> the CSS for that snapshot ref; anything else is already CSS."""
     return f'[data-zh-ref="{selector[1:]}"]' if selector.startswith("@") else selector
 
 
@@ -129,8 +132,20 @@ def _q(selector):
     return f"document.querySelector({json.dumps(selector)})"
 
 
+def _locate(selector):
+    """(context, JS expression for the element). Frame refs like '@f1e3' resolve in
+    their frame's context (recorded by the last snapshot); everything else in the tab."""
+    ctx = _ctx()
+    m = re.fullmatch(r"@(f\d+)e\d+", selector)
+    if m:
+        ctx = _evaluate(f"window.__zhFrames?.{m[1]}", ctx, passive=True)
+        if not ctx:
+            raise RuntimeError(f"no frame for {selector!r}; take a new snapshot()")
+    return ctx, _q(selector)
+
+
 _SNAPSHOT_JS = r"""
-((query, within, limit, hrefs) => {
+((query, within, limit, hrefs, prefix) => {
   const ROLES = new Set(['button','link','checkbox','radio','tab','menuitem','menuitemcheckbox',
     'menuitemradio','option','switch','textbox','combobox','searchbox','slider','spinbutton','treeitem','listbox']);
   const INPUT = {checkbox:'checkbox', radio:'radio', button:'button', submit:'button', reset:'button',
@@ -172,13 +187,15 @@ _SNAPSHOT_JS = r"""
   const walk = root => { for (const e of root.querySelectorAll('*')) { els.push(e); if (e.shadowRoot) walk(e.shadowRoot); } };
   walk(document);
   for (const e of els) if (e.hasAttribute('data-zh-ref')) e.removeAttribute('data-zh-ref');
+  delete window.__zhFrames;
   const scope = within ? document.querySelector(within) : null;
   if (within && !scope) throw new Error('snapshot: nothing matches within=' + within);
   const q = (query || '').toLowerCase();
-  const items = [];
+  const items = [], frames = [];
   let total = 0;
   for (const e of els) {
     if (scope && !scope.contains(e)) continue;
+    if ((e.tagName === 'IFRAME' || e.tagName === 'FRAME') && e.contentWindow && shown(e)) frames.push(e.contentWindow);
     const role = roleOf(e);
     if (!role || !shown(e)) continue;
     const name = cut(nameOf(e), 80);
@@ -186,7 +203,7 @@ _SNAPSHOT_JS = r"""
     if (q && !(role + ' ' + name + (hrefs ? ' ' + href : '')).toLowerCase().includes(q)) continue;
     total++;
     if (items.length >= limit) continue;
-    const ref = 'e' + (items.length + 1);
+    const ref = prefix + 'e' + (items.length + 1);
     e.setAttribute('data-zh-ref', ref);
     const extra = [];
     if (e.tagName === 'SELECT') extra.push('value="' + cut(clean(e.selectedOptions[0]?.text), 40) + '"');
@@ -199,9 +216,18 @@ _SNAPSHOT_JS = r"""
     if (hrefs && href) extra.push('-> ' + cut(href, 80));
     items.push([ref, role, name, extra.join(' ')]);
   }
-  return {items, total};
+  return {items, total, frames, url: location.href};
 })
 """
+
+
+def _snapshot_in(ctx, prefix, query, within, limit, hrefs):
+    return js(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},"
+              f"{json.dumps(bool(hrefs))},{json.dumps(prefix)})", target_id=ctx, _passive=True)
+
+
+def _snapshot_line(ref, role, name, extra):
+    return f'@{ref} {role} {json.dumps(name, ensure_ascii=False)}' + (f" {extra}" if extra else "")
 
 
 def snapshot(query=None, within=None, limit=150, hrefs=False):
@@ -209,18 +235,39 @@ def snapshot(query=None, within=None, limit=150, hrefs=False):
 
         @e3 button "Star VibiumDev/vibium"
         @e7 textbox "Where from?" value="Toronto"
+        # frame f1 https://js.stripe.com/v3/elements-inner-card.html
+        @f1e1 textbox "Card number"
 
-    Pass a ref like "@e3" to click / fill_input / wait_for_element / dispatch_key /
-    upload_file. Refs last until the next snapshot or navigation.
+    Pass a ref like "@e3" or "@f1e1" to click / fill_input / wait_for_element /
+    dispatch_key / upload_file. Refs last until the next snapshot or navigation.
+    Open shadow roots and visible iframes (any origin, nested) are included; each
+    frame with matches gets a "# frame fN <url>" line, then its elements.
     query: keep elements whose role or name (plus link href, with hrefs=True) contains this text.
-    within: CSS selector to limit the snapshot to one part of the page.
-    hrefs: append link targets. Open shadow roots are included; iframes are not."""
-    r = js(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},{json.dumps(bool(hrefs))})",
-           _passive=True)
-    lines = [f'@{ref} {role} {json.dumps(name, ensure_ascii=False)}' + (f" {extra}" if extra else "")
-             for ref, role, name, extra in r["items"]]
-    if r["total"] > len(lines):
-        lines.append(f"... {r['total'] - len(lines)} more; narrow with query= or within=")
+    within: CSS selector in the top document; only it and the frames inside it are listed.
+    limit: most elements to list, across all frames.
+    hrefs: append link targets."""
+    top = _ctx()
+    r = _snapshot_in(top, "", query, within, limit, hrefs)
+    lines = [_snapshot_line(*i) for i in r["items"]]
+    listed, total, frames = len(lines), r["total"], {}
+    todo = [w["context"] for w in r["frames"]]
+    while todo:
+        ctx, name = todo.pop(0), f"f{len(frames) + 1}"
+        try:
+            f = _snapshot_in(ctx, name, query, None, limit - listed, hrefs)
+        except RuntimeError:
+            continue  # the frame went away or won't run scripts
+        todo[:0] = [w["context"] for w in f["frames"]]  # nested frames come right after their parent
+        total += f["total"]
+        if f["items"]:
+            frames[name] = ctx
+            listed += len(f["items"])
+            url = f["url"] if len(f["url"]) <= 100 else f["url"][:99] + "…"
+            lines += [f"# frame {name} {url}"] + [_snapshot_line(*i) for i in f["items"]]
+    if frames:
+        _evaluate(f"window.__zhFrames={json.dumps(frames)}", top, passive=True)
+    if total > listed:
+        lines.append(f"... {total - listed} more; narrow with query= or within=")
     return "\n".join(lines) or "(no interactive elements" + (f" matching {query!r})" if query else ")")
 
 
@@ -276,28 +323,34 @@ def _perform(ctx, *sources):
     bidi("input.performActions", context=ctx, actions=list(sources))
 
 
-def click_at_xy(x, y, button="left", clicks=1):
-    """Click at viewport coordinates (CSS pixels, as in page_info / screenshots at 1x)."""
+def _click(ctx, x, y, button="left", clicks=1):
+    """Click at (x, y) in `ctx`'s own viewport (a frame's context takes frame coordinates)."""
     b = _BUTTONS[button]
     acts = [{"type": "pointerMove", "x": round(x), "y": round(y), "origin": "viewport"}]
     for _ in range(clicks):
         acts += [{"type": "pointerDown", "button": b}, {"type": "pointerUp", "button": b}]
-    _perform(_ctx(), {"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
-                      "actions": acts})
+    _perform(ctx, {"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
+                   "actions": acts})
+
+
+def click_at_xy(x, y, button="left", clicks=1):
+    """Click at viewport coordinates (CSS pixels, as in page_info / screenshots at 1x)."""
+    _click(_ctx(), x, y, button, clicks)
 
 
 def click(selector, timeout=0.0):
     """Scroll the first element matching `selector` into view and click its centre."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"click: element not found: {selector!r}")
-    box = js(f"(()=>{{const e={_q(selector)};if(!e)return null;"
+    ctx, el = _locate(selector)
+    box = js(f"(()=>{{const e={el};if(!e)return null;"
              "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
-             "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};})()")
+             "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};})()", target_id=ctx)
     if not box:
         raise RuntimeError(f"click: element not found: {selector!r}")
     if not box["w"] and not box["h"]:
         raise RuntimeError(f"click: element is not displayed: {selector!r}")
-    click_at_xy(box["x"], box["y"])
+    _click(ctx, box["x"], box["y"])
 
 
 def _key_actions(keys):
@@ -307,21 +360,31 @@ def _key_actions(keys):
     return acts
 
 
+def _keys(ctx, acts):
+    _perform(ctx, {"type": "key", "id": "keyboard", "actions": acts})
+
+
+def _text_actions(text):
+    return _key_actions("" if ch == "\n" else ch for ch in text)
+
+
+def _press_actions(key, modifiers=0):
+    mods = [code for bit, code in _MODIFIERS if modifiers & bit]
+    value = _KEYS.get(key, key)
+    acts = [{"type": "keyDown", "value": m} for m in mods]
+    acts += [{"type": "keyDown", "value": value}, {"type": "keyUp", "value": value}]
+    return acts + [{"type": "keyUp", "value": m} for m in reversed(mods)]
+
+
 def type_text(text):
     """Type into the focused element with real key events ("\\n" presses Enter)."""
-    _perform(_ctx(), {"type": "key", "id": "keyboard",
-                      "actions": _key_actions("" if ch == "\n" else ch for ch in text)})
+    _keys(_ctx(), _text_actions(text))
 
 
 def press_key(key, modifiers=0):
     """Press one key, e.g. "Enter", "Tab", "ArrowDown", "a".
     Modifiers bitfield: 1=Alt, 2=Ctrl, 4=Meta(Cmd), 8=Shift."""
-    mods = [code for bit, code in _MODIFIERS if modifiers & bit]
-    value = _KEYS.get(key, key)
-    acts = [{"type": "keyDown", "value": m} for m in mods]
-    acts += [{"type": "keyDown", "value": value}, {"type": "keyUp", "value": value}]
-    acts += [{"type": "keyUp", "value": m} for m in reversed(mods)]
-    _perform(_ctx(), {"type": "key", "id": "keyboard", "actions": acts})
+    _keys(_ctx(), _press_actions(key, modifiers))
 
 
 def fill_input(selector, text, clear_first=True, timeout=0.0):
@@ -329,26 +392,28 @@ def fill_input(selector, text, clear_first=True, timeout=0.0):
     key events, then fire input+change so the framework sees the new value."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"fill_input: element not found: {selector!r}")
-    if not js(f"(()=>{{const e={_q(selector)};"
+    ctx, el = _locate(selector)
+    if not js(f"(()=>{{const e={el};"
               "if(!e)return false;e.focus();if(e.isContentEditable){const r=document.createRange();"
               "r.selectNodeContents(e);r.collapse(false);getSelection().removeAllRanges();"
-              "getSelection().addRange(r);}return true;})()"):
+              "getSelection().addRange(r);}return true;})()", target_id=ctx):
         raise RuntimeError(f"fill_input: element not found: {selector!r}")
     if clear_first:
-        press_key("a", 4 if sys.platform == "darwin" else 2)
-        press_key("Backspace")
-    type_text(text)
-    js(f"(()=>{{const e={_q(selector)};if(!e)return;"
+        _keys(ctx, _press_actions("a", 4 if sys.platform == "darwin" else 2))
+        _keys(ctx, _press_actions("Backspace"))
+    _keys(ctx, _text_actions(text))
+    js(f"(()=>{{const e={el};if(!e)return;"
        "e.dispatchEvent(new Event('input',{bubbles:true}));"
-       "e.dispatchEvent(new Event('change',{bubbles:true}));})()")
+       "e.dispatchEvent(new Event('change',{bubbles:true}));})()", target_id=ctx)
 
 
 def dispatch_key(selector, key="Enter", event="keypress"):
     """Dispatch a synthetic DOM KeyboardEvent on an element (for sites that ignore real keys)."""
     kc = {"Enter": 13, "Tab": 9, "Escape": 27, "Backspace": 8, " ": 32}.get(key, ord(key) if len(key) == 1 else 0)
-    js(f"(()=>{{const e={_q(selector)};if(e){{e.focus();"
+    ctx, el = _locate(selector)
+    js(f"(()=>{{const e={el};if(e){{e.focus();"
        f"e.dispatchEvent(new KeyboardEvent({json.dumps(event)},{{key:{json.dumps(key)},"
-       f"code:{json.dumps(key)},keyCode:{kc},which:{kc},bubbles:true}}));}}}})()")
+       f"code:{json.dumps(key)},keyCode:{kc},which:{kc},bubbles:true}}));}}}})()", target_id=ctx)
 
 
 def scroll(x, y, dy=-300, dx=0):
@@ -368,7 +433,7 @@ def scroll(x, y, dy=-300, dx=0):
 
 def upload_file(selector, path):
     """Set files on an <input type=file>. `path` is an absolute path or a list of them."""
-    ctx = _ctx()
+    ctx, el = _locate(selector)
     nodes = bidi("browsingContext.locateNodes", context=ctx,
                  locator={"type": "css", "value": _ref_css(selector)}, maxNodeCount=1)["nodes"]
     if not nodes:
@@ -383,10 +448,10 @@ def upload_file(selector, path):
             raise
         payload = json.dumps([[Path(f).name, mimetypes.guess_type(f)[0] or "application/octet-stream",
                                base64.b64encode(Path(f).read_bytes()).decode()] for f in files])
-        js(f"""(()=>{{const e={_q(selector)};const dt=new DataTransfer();
+        js(f"""(()=>{{const e={el};const dt=new DataTransfer();
           for(const [n,t,b] of {payload})dt.items.add(new File([Uint8Array.from(atob(b),c=>c.charCodeAt(0))],n,{{type:t}}));
           e.files=dt.files;e.dispatchEvent(new Event('input',{{bubbles:true}}));
-          e.dispatchEvent(new Event('change',{{bubbles:true}}));}})()""")
+          e.dispatchEvent(new Event('change',{{bubbles:true}}));}})()""", target_id=ctx)
 
 
 # --- visual ---
@@ -557,7 +622,7 @@ def wait_for_load(timeout=15.0):
 def wait_for_element(selector, timeout=10.0, visible=False):
     """Poll until querySelector(selector) exists (and is visible if asked). True if found.
     Like wait_for_load, it looks at the new page when the last action navigated."""
-    check = (f"(()=>{{const e={_q(selector)};if(!e)return false;"
+    check = ("(()=>{const e=%s;if(!e)return false;"
              + ("const r=e.getBoundingClientRect();const s=getComputedStyle(e);"
                 "return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';"
                 if visible else "return true;") + "})()")
@@ -565,8 +630,10 @@ def wait_for_element(selector, timeout=10.0, visible=False):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            if _settled(ctx, need_load=False) and js(check, _passive=True):
-                return True
+            if _settled(ctx, need_load=False):
+                where, el = _locate(selector)
+                if js(check % el, target_id=where, _passive=True):
+                    return True
         except RuntimeError:
             pass
         time.sleep(0.1)

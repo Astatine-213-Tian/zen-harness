@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Snapshot frames</title></head>
+<body>
+  <button type="button">Top</button>
+  <iframe id="same" src="frame-inner.html" width="400" height="120"></iframe>
+  <iframe id="hidden" src="frame-inner.html?hidden=1" style="display:none"></iframe>
+  <iframe id="cross" width="400" height="120"></iframe>
+  <iframe id="outer" width="400" height="220"></iframe>
+  <button type="button">After frames</button>
+  <script>
+    // Same server under another host name = another origin.
+    const other = `http://localhost:${location.port}`;
+    document.getElementById('cross').src = `${other}/frame-inner.html?cross=1`;
+    document.getElementById('outer').src = `${other}/frame-outer.html`;
+  </script>
+</body>
+</html>
