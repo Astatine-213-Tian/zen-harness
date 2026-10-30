@@ -77,6 +77,7 @@ Only if the user wants a non-default profile or port, or runtime mode, also writ
 ```toml
 profile = "Work"              # profile name from Zen, or a profile folder path
 # remote_mode = "runtime"         # hide automation from websites (see above)
+# foreground = "allow"            # let agents show a tab/window when a page stalls (default: never)
 # port = 9222
 # if_not_listening = "relaunch"   # make the harness itself restart Zen automatically
 ```

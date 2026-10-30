@@ -19,7 +19,7 @@ To reach a known element, skip scrolling maths: `js("document.querySelector('#ta
 Feeds usually load the next page when a sentinel comes into view (`IntersectionObserver`). In a background tab that observer stops updating, so the feed stalls: on a fixture 40 of 100 rows, however you scroll.
 
 1. Best: read the feed's JSON API directly (see `zen-harness notes network`); no scrolling at all.
-2. Else scroll where the page runs at full speed (see "Background tabs are throttled" in `zen-harness notes tabs`): `new_window(url)` for a long session, or `with in_front():` around the loop. Tell the user. Scroll in rounds until the count stops growing; going back up first makes the observer fire again if it last saw the sentinel while the tab was hidden:
+2. Else, only with the user's OK and `foreground = "allow"` in their config, scroll where the page runs at full speed (see "Background tabs are throttled" in `zen-harness notes tabs`): `new_window(url)` for a long session, or `with in_front():` around the loop. Scroll in rounds until the count stops growing; going back up first makes the observer fire again if it last saw the sentinel while the tab was hidden:
 
 ```python
 with in_front():

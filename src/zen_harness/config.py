@@ -11,6 +11,7 @@ CHOICES = {
     "if_not_listening": ("instruct", "relaunch"),
     "automation_prefs": ("skip", "apply"),
     "remote_mode": ("flags", "runtime"),
+    "foreground": ("never", "allow"),
 }
 
 
@@ -31,6 +32,9 @@ class Config:
     idle_timeout: int = 1800  # seconds; 0 keeps the session forever
     workspace: str = str(Path.home() / ".zen-harness")
     tab_marker: str = "\U0001F434"
+    # never: in_front() and new_window() refuse, so agents can't put anything in front of
+    # the user. allow: they may (the user sees a tab switch or a new window).
+    foreground: str = "never"
 
     @property
     def workspace_path(self) -> Path:

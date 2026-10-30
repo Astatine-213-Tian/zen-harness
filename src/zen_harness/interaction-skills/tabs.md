@@ -19,7 +19,9 @@ Tabs from `new_tab` report `document.visibilityState == "hidden"`. Clicks, typin
 
 In a hidden tab Zen stops `requestAnimationFrame` (0 frames/s against 60), runs timers about once a second, and stops updating `IntersectionObserver`. So a debounced search answers late, lazy images and infinite feeds stop loading, animations stall. On a fixture an infinite feed had 40 of 100 rows after 5 s hidden, and all 100 within 1.3 s at full speed. No BiDi command or per-session setting turns this off.
 
-Wait on the result (`wait_for_element(...)`), not a fixed sleep. If the page really stalls, pick one and tell the user:
+Wait on the result (`wait_for_element(...)`), not a fixed sleep. If the page stalls, first get the data without showing anything: the site's JSON API or `fetch` via `js()` (`zen-harness notes network`), the next page's URL, or `scroll()`.
+
+Only if the page truly has to be visible: both helpers below are **off by default** (`foreground = "never"`) and raise until the user sets `foreground = "allow"` in `~/.config/zen-harness/config.toml`. Ask the user first; then pick one and tell them:
 
 - `with in_front():` shows your tab for the block, then the user's tab again. They see their window switch tabs, and Zen comes in front of the app they are using and stays there. If their Zen window was minimized or covered, no tab was showing, so yours stays in front. Keep the block short.
 - `new_window(url)` opens the page in a Zen window of your own, at full speed from then on; the user's tabs never switch. It takes the size and place of their Zen window: behind it if Zen was the active app (a ~0.3 s flash), otherwise on top of it, behind the app they are using. It runs only while part of it is on screen and not covered by another app (Zen's own windows don't count), so a minimized, hidden or covered Zen throttles it like a tab. `close_tab()` closes it.

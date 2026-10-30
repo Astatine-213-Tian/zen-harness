@@ -72,6 +72,7 @@ headless = false
 idle_timeout = 1800           # seconds without calls before the session is released; 0 = never
 workspace = "~/.zen-harness"
 tab_marker = "🐴"             # prefix on the controlled tab's title; "" to disable
+foreground = "never"          # or "allow": let agents show a tab or window (in_front, new_window)
 ```
 
 `profile` and `automation_prefs` only matter when the harness starts Zen.
@@ -98,7 +99,7 @@ tab_marker = "🐴"             # prefix on the controlled tab's title; "" to di
   - Firefox plans to move such sessions into a separate container, which would hide your logins from them.
 - **Automation prefs.** In that mode Firefox also applies ~120 "recommended" automation prefs (e.g. turns off Safe Browsing) while it runs. With `automation_prefs = "skip"` (default), the harness adds `user_pref("remote.prefs.recommended", false);` to the profile's `user.js` when it launches the profile, so your everyday settings stay.
 - **Force-killing the daemon.** When the harness starts Zen it adds `--marionette` and opens the session through Marionette, which Zen ends as soon as the daemon's connection drops, even after `kill -9`. If Zen was started with only `--remote-debugging-port`, the harness falls back to a plain BiDi session, which Zen keeps after its client disappears: the daemon still ends it on errors, idle timeout and SIGTERM/SIGINT/SIGHUP, but after a `kill -9` run `zen-harness relaunch`. `zen-harness doctor` shows which kind is in use.
-- **Background tabs.** Agents work in background tabs. Clicks, typing and JS work there; wheel scrolling falls back to scrolling the element under the point.
+- **Background tabs, nothing in front.** Agents work in background tabs and never switch your tab or bring Zen forward. Clicks, typing and JS work there; wheel scrolling falls back to scrolling the element under the point. Zen throttles hidden tabs, so lazy loading or infinite feeds can stall; agents first get the data another way. The helpers that show the page (`in_front()`, `new_window()`) stay off unless you set `foreground = "allow"`.
 - **Remote Control toggle.** Firefox is adding a built-in "Remote control for AI assistants" toolbar switch that turns this on without restarting (and without `navigator.webdriver`). Zen 1.23.4b ships its backend but not the button yet. zen-harness attaches to it unchanged once it appears.
 
 ## zen-harness vs browser-harness

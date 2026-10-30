@@ -88,3 +88,9 @@ def at(zh, site):
         zh(f"new_tab({site + '/' + path!r}); wait_for_load()")
         return zh
     return open_page
+
+
+@pytest.fixture
+def allow_foreground(env, monkeypatch):
+    """Let snippets in this test use in_front() / new_window() (off by default)."""
+    monkeypatch.setitem(env, "ZH_FOREGROUND", "allow")

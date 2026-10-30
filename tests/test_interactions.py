@@ -217,6 +217,7 @@ def shown():
 """
 
 
+@pytest.mark.usefixtures("allow_foreground")
 def test_background_tab_is_throttled_and_in_front_runs_it_then_restores_the_user_tab(at):
     out = at("busy.html")(SPEED + """
 me = current_tab()["targetId"]
@@ -229,6 +230,7 @@ print(shown() == before, js("document.visibilityState"))
     assert out.splitlines() == ["True False", "True True True", "True hidden"]
 
 
+@pytest.mark.usefixtures("allow_foreground")
 def test_new_window_runs_at_full_speed_without_switching_the_user_tab(zh, site):
     out = zh(SPEED + f"""
 before = shown()
@@ -363,6 +365,7 @@ print(js("document.querySelector('#pane').scrollTop"), page_info()['sy'])
     assert out.splitlines() == ["hidden", "400 0"]
 
 
+@pytest.mark.usefixtures("allow_foreground")
 def test_infinite_feed_loads_in_front_after_stalling_hidden(at):
     out = at("scroll.html")("""
 for _ in range(5):
@@ -517,3 +520,9 @@ def test_stop_then_immediate_snippet(zh, env):
         assert zh(f"print(js('{i}'))") == str(i)
         subprocess.run([sys.executable, "-m", "zen_harness.run", "stop"], env=env, capture_output=True, check=True)
     assert zh("print(js('7'))") == "7"
+
+
+def test_foreground_helpers_are_off_by_default(page):
+    for call in ("with in_front(): pass", "new_window('about:blank')"):
+        p = page(call, check=False)
+        assert p.returncode == 1 and 'foreground = "never"' in p.stderr

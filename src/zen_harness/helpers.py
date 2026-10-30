@@ -526,6 +526,15 @@ def _visible(ctx):
     return r.get("result", {}).get("value") == "visible"
 
 
+def _require_foreground(name):
+    if CFG.foreground != "allow":
+        raise RuntimeError(
+            f"{name} shows a tab or window to the user, which is off (foreground = \"never\"). "
+            "Work in the background instead (read data with js()/fetch, page through URLs, scroll()); "
+            "if the page truly needs to be visible, ask the user to set foreground = \"allow\" in "
+            "~/.config/zen-harness/config.toml (or ZH_FOREGROUND=allow).")
+
+
 @contextmanager
 def in_front(target=None):
     """Show the controlled tab (or `target`) for the duration of the block, then show the
@@ -538,7 +547,10 @@ def in_front(target=None):
 
     The user sees their Zen window switch to this tab, and Zen comes in front of the app
     they are using; afterwards their tab is back, but Zen stays the active app. If their
-    window was minimized or covered, no tab was showing, so this tab stays."""
+    window was minimized or covered, no tab was showing, so this tab stays.
+
+    Off unless the user's config has `foreground = "allow"`."""
+    _require_foreground("in_front()")
     ctx = _target_id(target) or _ctx()
     tree = _top_contexts()
     win = next((c.get("clientWindow") for c in tree if c["context"] == ctx), None)
@@ -622,7 +634,10 @@ def new_window(url="about:blank"):
     user's tabs are never switched. What the user sees: a window opens over their Zen
     window, same size and place. If Zen was the active app, their window is put back in
     front so this one waits behind it; otherwise it stays on top of their Zen window,
-    behind the app they are using. close_tab() closes it."""
+    behind the app they are using. close_tab() closes it.
+
+    Off unless the user's config has `foreground = "allow"`."""
+    _require_foreground("new_window()")
     windows = bidi("browser.getClientWindows")["clientWindows"]
     home = next((w for w in windows if w["active"]), None) or next(
         (w for w in windows if w["state"] != "minimized"), windows[0])
