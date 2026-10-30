@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Busy</title></head>
+<body>
+  <p id="state">counting</p>
+  <script>
+    // Counters a throttled (hidden) tab advances slowly: animation frames and a 50 ms interval.
+    window.__frames = 0;
+    window.__ticks = 0;
+    (function frame() { window.__frames++; requestAnimationFrame(frame); })();
+    setInterval(() => window.__ticks++, 50);
+    window.__vis = [document.visibilityState];
+    document.addEventListener('visibilitychange', () => window.__vis.push(document.visibilityState));
+  </script>
+</body>
+</html>

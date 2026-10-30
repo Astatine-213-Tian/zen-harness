@@ -16,21 +16,22 @@ To reach a known element, skip scrolling maths: `js("document.querySelector('#ta
 
 ## Infinite feeds
 
-Feeds usually load the next page when a sentinel comes into view (`IntersectionObserver`). In a background tab that observer stops updating after its first callback, so the feed stalls: on a fixture 40 of 100 rows after a minute, however you scroll.
+Feeds usually load the next page when a sentinel comes into view (`IntersectionObserver`). In a background tab that observer stops updating, so the feed stalls: on a fixture 40 of 100 rows, however you scroll.
 
 1. Best: read the feed's JSON API directly (see `zen-harness notes network`); no scrolling at all.
-2. Else bring the tab forward, tell the user, and scroll in rounds until the count stops growing:
+2. Else scroll where the page runs at full speed (see "Background tabs are throttled" in `zen-harness notes tabs`): `new_window(url)` for a long session, or `with in_front():` around the loop. Tell the user. Scroll in rounds until the count stops growing; going back up first makes the observer fire again if it last saw the sentinel while the tab was hidden:
 
 ```python
-activate_tab(current_tab())
-count = 0
-for _ in range(50):
-    js("window.scrollTo(0, document.documentElement.scrollHeight)")
-    wait(0.5)
-    n = js("document.querySelectorAll('#feed li').length")
-    if n == count:
-        break
-    count = n
+with in_front():
+    count = 0
+    for _ in range(50):
+        js("window.scrollTo(0, 0)"); wait(0.1)
+        js("window.scrollTo(0, document.documentElement.scrollHeight)")
+        wait(0.5)
+        n = js("document.querySelectorAll('#feed li').length")
+        if n == count:
+            break
+        count = n
 print(count)
 ```
 
