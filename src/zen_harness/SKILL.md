@@ -22,8 +22,8 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 ## Helpers
 
 - Tabs: `new_tab(url)` (opens in the background and controls it; use this for the first navigation), `goto_url(url)`, `list_tabs()`, `current_tab()`, `switch_tab(tab)`, `activate_tab(tab)`, `close_tab(tab=None)`, `ensure_real_tab()`
-- Read: `snapshot(query=None, within=None, limit=150, hrefs=False)` → one line per visible control, e.g. `@e3 button "Search"`; `page_info()` → `{url, title, w, h, sx, sy, pw, ph}`, or `{dialog: ...}` while a dialog is open; `js(expr, target_id=None)`; `capture_screenshot(path=None, full=False, max_dim=None)`
-- Act: `click(selector)`, `click_at_xy(x, y)`, `fill_input(selector, text)`, `type_text(text)`, `press_key(key, modifiers=0)` (1=Alt 2=Ctrl 4=Cmd 8=Shift), `scroll(x, y, dy)`, `upload_file(selector, path)`, `dispatch_key(selector, key)`, `handle_dialog(accept=True, text=None)`. Every `selector` may be CSS or a snapshot ref like `"@e3"`.
+- Read: `snapshot(query=None, within=None, limit=150, hrefs=False)` → one line per visible control, e.g. `@e3 button "Search"`, then each iframe's controls under a `# frame f1 <url>` line (`@f1e2`); `page_info()` → `{url, title, w, h, sx, sy, pw, ph}`, or `{dialog: ...}` while a dialog is open; `js(expr, target_id=None)`; `capture_screenshot(path=None, full=False, max_dim=None)`
+- Act: `click(selector)`, `click_at_xy(x, y)`, `fill_input(selector, text)`, `type_text(text)`, `press_key(key, modifiers=0)` (1=Alt 2=Ctrl 4=Cmd 8=Shift), `scroll(x, y, dy)`, `upload_file(selector, path)`, `dispatch_key(selector, key)`, `handle_dialog(accept=True, text=None)`. Every `selector` may be CSS (top document) or a snapshot ref like `"@e3"` or `"@f1e2"` (inside a frame).
 - Wait: `wait_for_load()`, `wait_for_element(selector, timeout=10, visible=False)`, `wait_for_network_idle()`, `wait(seconds)`
 - Other: `iframe_target(url_substr)` (pass to `js(..., target_id=...)`), `drain_events()` (console logs, finished requests, dialogs), `http_get(url)`, `bidi(method, **params)` (raw WebDriver BiDi)
 
@@ -36,7 +36,7 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 - After a navigation or a click that loads a page, call `wait_for_load()`; it waits for the new page, not the one you left. On single-page apps use `wait_for_element(...)`.
 - Find controls with `snapshot()` first: a whole GitHub repo page is ~100 lines (~750 tokens). Narrow it with `snapshot("star")` or `snapshot(within="form")`, then act on the ref: `click("@e3")`, `fill_input("@e7", "Toronto")`. Refs last until the next `snapshot()` or navigation, so snapshot again after the page changes.
 - For text and data (prices, lists, tables) use `js(...)` and print only what you need. Do not print whole pages.
-- Use `click_at_xy` for canvas or odd widgets: get coordinates from `getBoundingClientRect()` in `js`, or from a screenshot. `snapshot()` does not look inside iframes; use `iframe_target` + `js` there. (BiDi's accessibility locator hangs in Zen; don't use it.)
+- Use `click_at_xy` for canvas or odd widgets: get coordinates from `getBoundingClientRect()` in `js`, or from a screenshot. `snapshot()` includes iframes (any origin), and frame refs route clicks and keys to the frame; for other work in a frame use `iframe_target` + `js`. (BiDi's accessibility locator hangs in Zen; don't use it.)
 - Dialogs: a click that opens alert/confirm/prompt returns at once; `page_info()` then shows `{dialog: ...}`. Answer it with `handle_dialog(...)`.
 - Verify the result with a targeted `js(...)` or `page_info()` check before reporting success.
 - Login walls, passwords, MFA, payment or consent screens: stop and ask the user.

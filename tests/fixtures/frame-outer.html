@@ -1,0 +1,9 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Outer</title></head>
+<body>
+  <a href="#more">Outer link</a>
+  <input type="file" id="files" aria-label="Attach" onchange="document.title = this.files[0].name">
+  <iframe src="frame-inner.html?nested=1" width="360" height="120"></iframe>
+</body>
+</html>
