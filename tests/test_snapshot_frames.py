@@ -94,3 +94,16 @@ except RuntimeError as e:
 def test_page_without_frames_sets_no_frame_map(at):
     zh = at("forms.html")
     assert zh("snapshot(); print(js('window.__zhFrames'))") == "None"
+
+
+def test_wait_for_load_after_a_frame_click_navigates_the_tab(zh, site):
+    zh(f"new_tab({site + '/snapshot-frames.html'!r}); wait_for_load()")
+    out = zh(f"""
+f = iframe_target('frame-inner.html')
+js("const a = document.createElement('a'); a.href = {site + '/slow.html?ms=600'!r}; a.target = '_top';"
+   "a.textContent = 'Go top'; document.body.append(a)", target_id=f)
+ref = snapshot('go top').splitlines()[-1].split()[0]
+click(ref)
+print(wait_for_load(), js('document.title'))
+""")
+    assert out == "True Slow page"

@@ -193,7 +193,10 @@ class Session:
             raise BiDiError(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
                             "answer it with handle_dialog() first")
         if method in NAVIGATION_CAUSES and not passive and slot["context"]:
-            self.last_cause[slot["context"]] = time.monotonic()
+            now = time.monotonic()
+            self.last_cause[slot["context"]] = now
+            if self.current and slot["context"] != self.current:
+                self.last_cause[self.current] = now  # e.g. a click in a frame can navigate the whole tab
         self.pending[msg_id] = slot
         with self.lock:
             self.ws.send(json.dumps({"id": msg_id, "method": method, "params": p}))
