@@ -72,8 +72,9 @@ def open_session(cfg):
         # Firefox never ends a BiDi-only session whose socket dropped, and it can't be rejoined.
         raise BiDiError(
             "Zen already has a remote-control session open: another tool (e.g. an MCP server) holds it,\n"
-            "or a zen-harness daemon was force-killed. Stop the other tool, or run `zen-harness relaunch`\n"
-            "to restart Zen (tabs come back through session restore).") from e
+            "or a zen-harness daemon was force-killed. Stop the other tool, or (after checking with the\n"
+            "user, since it ends whoever's session is open) run `zen-harness stop --force`, or\n"
+            "`zen-harness relaunch` to restart Zen (tabs come back through session restore).") from e
 
 
 class BiDiError(RuntimeError):
@@ -87,6 +88,38 @@ class SessionTaken(BiDiError):
     def __init__(self, message, client):
         super().__init__(message)
         self.client = client
+
+
+def force_end_session(cfg, timeout=5.0) -> str:
+    """End whatever remote-control session Zen has open, whoever holds it (`stop --force`).
+
+    Closing a Marionette connection makes Firefox end the open session, so connect and
+    close. Never call this automatically: it also ends another tool's live session."""
+    if connection.listener(cfg.port) != "bidi":
+        return f"Zen isn't accepting remote control on port {cfg.port}; nothing to clear"
+    released = time.time() + 1  # a session that was just stopped is released a moment later
+    while not session_free(cfg):
+        if time.time() > released:
+            break
+        time.sleep(0.1)
+    else:
+        return "Zen has no open session; nothing to clear"
+    port = connection.marionette_port(cfg)
+    if not port:
+        raise BiDiError("Zen runs without Marionette, so its open session can only be cleared by "
+                        "restarting Zen: run `zen-harness relaunch`")
+    try:
+        client = marionette.Client(port)
+    except (OSError, EOFError, ValueError, marionette.MarionetteError) as e:
+        raise BiDiError("another tool is connected to Zen through Marionette and holds the session; "
+                        "stop that tool (or run `zen-harness relaunch`)") from e
+    client.close()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if session_free(cfg):
+            return "ended Zen's open session"
+        time.sleep(0.2)
+    raise BiDiError(f"Zen still reports an open session {timeout:g}s later; run `zen-harness relaunch`")
 
 
 def park(cfg, client, poll=1.0):

@@ -114,7 +114,7 @@ Expected: `🐴 Example Domain` and one line like `@e1 link "Learn more"`. Tell 
 | Message | What to do |
 |---|---|
 | `Zen is running profile '…' without remote control` | Step 5, second bullet. |
-| `Zen already has a remote-control session open` | Another tool holds Zen's single automation session. Ask the user to stop it, or run `zen-harness relaunch`. |
+| `Zen already has a remote-control session open` | Another tool holds Zen's single automation session, or a crashed client left it open. Ask the user to stop the other tool; if nothing else should be using Zen, and with the user's OK, run `zen-harness stop --force` (or `zen-harness relaunch`). |
 | `Zen did not quit within 20s` | A "close tabs?" dialog is probably open in Zen. Ask the user to answer it, then retry. |
 | `no Zen profile named …` | The message lists the available names; fix `profile` in the config. |
 | Anything else | Run `zen-harness doctor` and show its output to the user. |

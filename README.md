@@ -84,6 +84,7 @@ tab_marker = "🐴"             # prefix on the controlled tab's title; "" to di
 | `zen-harness doctor` | config, Zen processes and profiles, port and session state |
 | `zen-harness status` | is a session open, which tab is controlled |
 | `zen-harness stop` | end the session (frees Zen for other tools) |
+| `zen-harness stop --force` | also end a session a crashed client left open, without restarting Zen (ends whoever's session is open; needs Zen's Marionette) |
 | `zen-harness relaunch` | quit Zen and reopen it with remote control on |
 | `zen-harness skill` | print the agent skill |
 

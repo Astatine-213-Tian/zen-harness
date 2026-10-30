@@ -67,3 +67,40 @@ def test_attaches_without_marionette(bidi_only_env):
                        env=bidi_only_env, capture_output=True, text=True, timeout=120)
     assert p.stdout.strip() == "42", p.stderr
     assert "session is BiDi-only" in doctor(bidi_only_env)
+
+
+def orphan_session(port):
+    """Open a BiDi-only session and drop its socket without ending it, like a crashed client."""
+    import json
+    from websockets.sync.client import connect
+    with connect(f"ws://127.0.0.1:{port}/session", open_timeout=10) as ws:
+        ws.send(json.dumps({"id": 1, "method": "session.new", "params": {"capabilities": {}}}))
+        assert json.loads(ws.recv(10))["type"] == "success"
+
+
+def cli(env, *args):
+    return subprocess.run([sys.executable, "-m", "zen_harness.run", *args], env=env,
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_stop_force_clears_an_orphaned_session(page, env):
+    cli(env, "stop")
+    orphan_session(PORT)
+    locked = page("print(1)", check=False)
+    assert locked.returncode == 1 and "stop --force" in locked.stderr
+    p = cli(env, "stop", "--force")
+    assert p.returncode == 0 and "ended Zen's open session" in p.stdout
+    assert "even another tool's" in p.stderr  # it warns before acting
+    assert page("print(js('1 + 1'))") == "2"
+
+
+def test_stop_force_with_nothing_to_clear(page, env):
+    page("print(1)")
+    p = cli(env, "stop", "--force")
+    assert p.returncode == 0 and "session ended" in p.stdout and "nothing to clear" in p.stdout
+
+
+def test_stop_force_needs_marionette(bidi_only_env):
+    orphan_session(bidi_only_env["ZH_PORT"])
+    p = cli(bidi_only_env, "stop", "--force")
+    assert p.returncode == 1 and "zen-harness relaunch" in p.stderr

@@ -4,7 +4,7 @@ import sys
 import traceback
 from importlib import resources
 
-from . import __version__, config, connection, helpers, ipc
+from . import __version__, config, connection, daemon, helpers, ipc
 
 HELP = f"""zen-harness {__version__}: let an agent drive your real Zen browser.
 
@@ -19,6 +19,8 @@ Commands:
   zen-harness doctor     show config, Zen processes, port and session state
   zen-harness status     is the session open, and which tab is controlled
   zen-harness stop       end the session (frees Zen for other tools)
+  zen-harness stop --force  also end a session left open by a crashed client or another
+                         tool (needs Zen's Marionette; ask the user first)
   zen-harness relaunch   quit Zen and reopen it with remote control on
   zen-harness skill      print the agent skill (SKILL.md)
   zen-harness notes      list interaction notes (iframes, uploads, ...); notes <topic> prints one
@@ -156,8 +158,17 @@ def main():
         if ipc.daemon_alive(cfg):
             ipc.send(cfg, {"meta": "stop"})
             print("session ended")
-        else:
+        elif "--force" not in args:
             print("no session")
+        if "--force" not in args:
+            return 0
+        print("zen-harness: --force ends whatever remote-control session Zen has open, "
+              "even another tool's.", file=sys.stderr)
+        try:
+            print(daemon.force_end_session(cfg))
+        except daemon.BiDiError as e:
+            print(f"zen-harness: {e}", file=sys.stderr)
+            return 1
         return 0
     if cmd == "relaunch":
         if ipc.daemon_alive(cfg):
