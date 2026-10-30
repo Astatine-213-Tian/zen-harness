@@ -21,7 +21,7 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 
 ## Helpers
 
-- Tabs: `new_tab(url)` (opens in the background and controls it; use this for the first navigation), `goto_url(url)`, `list_tabs()`, `current_tab()`, `switch_tab(tab)`, `activate_tab(tab)`, `close_tab(tab=None)`, `ensure_real_tab()`
+- Tabs: `new_tab(url)` (opens in the background and controls it; use this for the first navigation), `goto_url(url)`, `list_tabs()`, `current_tab()`, `switch_tab(tab)`, `in_front()`, `new_window(url)`, `activate_tab(tab)`, `close_tab(tab=None)`, `ensure_real_tab()`
 - Read: `snapshot(query=None, within=None, limit=150, hrefs=False)` → one line per visible control, e.g. `@e3 button "Search"`, then each iframe's controls under a `# frame f1 <url>` line (`@f1e2`); `page_info()` → `{url, title, w, h, sx, sy, pw, ph}`, or `{dialog: ...}` while a dialog is open; `js(expr, target_id=None)`; `capture_screenshot(path=None, full=False, max_dim=None)`
 - Act: `click(selector)`, `click_at_xy(x, y)`, `fill_input(selector, text)`, `type_text(text)`, `press_key(key, modifiers=0)` (1=Alt 2=Ctrl 4=Cmd 8=Shift), `scroll(x, y, dy)`, `upload_file(selector, path)`, `dispatch_key(selector, key)`, `handle_dialog(accept=True, text=None)`. Every `selector` may be CSS (top document) or a snapshot ref like `"@e3"` or `"@f1e2"` (inside a frame).
 - Wait: `wait_for_load()`, `wait_for_element(selector, timeout=10, visible=False)`, `wait_for_network_idle()`, `wait(seconds)`
@@ -31,7 +31,7 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 
 ## Working on a page
 
-- First navigation is `new_tab(url)`. It opens a background tab, so the user's visible tab stays put. Call `activate_tab(...)` only when the user asks to see it, or when a page stalls while hidden.
+- First navigation is `new_tab(url)`. It opens a background tab, so the user's visible tab stays put. Hidden tabs are throttled: if lazy loading, a feed or an animation stalls, use `with in_front():` or `new_window(url)` (`zen-harness notes tabs`). Call `activate_tab(...)` only when the user asks to see a tab.
 - The controlled tab's title starts with 🐴 so the user can see which tab you hold.
 - After a navigation or a click that loads a page, call `wait_for_load()`; it waits for the new page, not the one you left. On single-page apps use `wait_for_element(...)`.
 - Find controls with `snapshot()` first: a whole GitHub repo page is ~100 lines (~750 tokens). Narrow it with `snapshot("star")` or `snapshot(within="form")`, then act on the ref: `click("@e3")`, `fill_input("@e7", "Toronto")`. Refs last until the next `snapshot()` or navigation, so snapshot again after the page changes.

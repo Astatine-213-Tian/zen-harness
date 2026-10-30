@@ -202,6 +202,56 @@ print(current_tab()["targetId"] == me)
     assert out == ["hidden", f"{site}/frame-inner.html", "True"]
 
 
+# Animation frames per second in the controlled tab, and the tabs Zen shows (one per window).
+SPEED = """
+def fps():
+    a = js("[window.__frames, performance.now()]"); wait(1); b = js("[window.__frames, performance.now()]")
+    return (b[0] - a[0]) / (b[1] - a[1]) * 1000
+def is_shown(t):
+    try:
+        return js("document.visibilityState", target_id=t) == "visible"
+    except RuntimeError:
+        return False
+def shown():
+    return sorted(t["targetId"] for t in list_tabs() if is_shown(t["targetId"]))
+"""
+
+
+def test_background_tab_is_throttled_and_in_front_runs_it_then_restores_the_user_tab(at):
+    out = at("busy.html")(SPEED + """
+me = current_tab()["targetId"]
+before = shown()
+print(fps() < 5, me in before)
+with in_front():
+    print(fps() > 30, me in shown(), len(shown()) == len(before))
+print(shown() == before, js("document.visibilityState"))
+""")
+    assert out.splitlines() == ["True False", "True True True", "True hidden"]
+
+
+def test_new_window_runs_at_full_speed_without_switching_the_user_tab(zh, site):
+    out = zh(SPEED + f"""
+before = shown()
+windows = len(bidi("browser.getClientWindows")["clientWindows"])
+w = new_window({site + '/scroll.html'!r})
+print(fps() > 30, js("document.visibilityState"), shown() == sorted(before + [w]))
+for _ in range(50):  # the infinite feed loads while the agent scrolls
+    js("window.scrollTo(0, 0)"); wait(0.05)
+    js("window.scrollTo(0, document.documentElement.scrollHeight)"); wait(0.1)
+    if js("document.querySelectorAll('#feed li').length") == 100:
+        break
+print(js("document.querySelectorAll('#feed li').length"))
+tab = new_tab("about:blank")  # new tabs still open in the user's window
+home = {{c["context"]: c["clientWindow"] for c in bidi("browsingContext.getTree", maxDepth=0)["contexts"]}}
+print(home[tab] == home[before[0]] != home[w])
+close_tab(tab)
+close_tab(w)
+wait(0.5)
+print(len(bidi("browser.getClientWindows")["clientWindows"]) == windows)
+""")
+    assert out.splitlines() == ["True visible True", "100", "True", "True"]
+
+
 # --- iframes ---
 
 def test_cross_origin_frame_js_and_input_through_frame_context(at):
@@ -311,6 +361,26 @@ scroll(r['x'], r['y'], dy=400)
 print(js("document.querySelector('#pane').scrollTop"), page_info()['sy'])
 """)
     assert out.splitlines() == ["hidden", "400 0"]
+
+
+def test_infinite_feed_loads_in_front_after_stalling_hidden(at):
+    out = at("scroll.html")("""
+for _ in range(5):
+    js("window.scrollTo(0, document.documentElement.scrollHeight)"); wait(0.3)
+print(js("document.querySelectorAll('#feed li').length") < 100)
+with in_front():
+    count = 0
+    for _ in range(50):
+        js("window.scrollTo(0, 0)"); wait(0.1)
+        js("window.scrollTo(0, document.documentElement.scrollHeight)")
+        wait(0.5)
+        n = js("document.querySelectorAll('#feed li').length")
+        if n == count:
+            break
+        count = n
+print(count)
+""")
+    assert out.splitlines() == ["True", "100"]
 
 
 # --- network ---

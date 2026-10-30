@@ -1,6 +1,6 @@
 # Tabs
 
-Work in background tabs you opened, foreground one only when it stalls, and catch tabs a click opens.
+Work in background tabs you opened, run stalled pages at full speed, and catch tabs a click opens.
 
 ## Basics
 
@@ -17,13 +17,20 @@ Tabs from `new_tab` report `document.visibilityState == "hidden"`. Clicks, typin
 
 ## Background tabs are throttled
 
-In a hidden tab Zen runs `requestAnimationFrame` about once a second, delays timers to about a second, and stops updating `IntersectionObserver` after its first callback. So a debounced search answers late, lazy images and infinite feeds stop loading, animations stall. On a fixture, `setInterval(..., 100)` fired twice in 3 s, and an infinite feed loaded 40 of 100 rows in a minute hidden but all 100 in 1.2 s once visible.
+In a hidden tab Zen stops `requestAnimationFrame` (0 frames/s against 60), runs timers about once a second, and stops updating `IntersectionObserver`. So a debounced search answers late, lazy images and infinite feeds stop loading, animations stall. On a fixture an infinite feed had 40 of 100 rows after 5 s hidden, and all 100 within 1.3 s at full speed. No BiDi command or per-session setting turns this off.
 
-Wait on the result (`wait_for_element(...)`), not a fixed sleep. If the page really stalls, bring it to the front and tell the user, since it changes what they see:
+Wait on the result (`wait_for_element(...)`), not a fixed sleep. If the page really stalls, pick one and tell the user:
+
+- `with in_front():` shows your tab for the block, then the user's tab again. They see their window switch tabs, and Zen comes in front of the app they are using and stays there. If their Zen window was minimized or covered, no tab was showing, so yours stays in front. Keep the block short.
+- `new_window(url)` opens the page in a Zen window of your own, at full speed from then on; the user's tabs never switch. It takes the size and place of their Zen window: behind it if Zen was the active app (a ~0.3 s flash), otherwise on top of it, behind the app they are using. It runs only while part of it is on screen and not covered by another app (Zen's own windows don't count), so a minimized, hidden or covered Zen throttles it like a tab. `close_tab()` closes it.
 
 ```python
-activate_tab(current_tab())
+with in_front():
+    js("document.querySelector('#more').scrollIntoView()")
+    wait_for_element("#row-40", timeout=5)
 ```
+
+`activate_tab(tab)` brings a tab and Zen to the front and leaves them there; use it when the user asks to see the tab.
 
 ## Tabs opened by the page
 

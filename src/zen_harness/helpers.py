@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -508,10 +509,50 @@ def _unmark(ctx):
 
 
 def activate_tab(target):
-    """Bring a tab to the front in Zen. Only when the user asks or a page stalls in the background."""
+    """Bring a tab to the front in Zen, and Zen in front of other apps. Leaves it there;
+    prefer `with in_front():`, which puts the user's tab back afterwards."""
     ctx = _target_id(target)
     bidi("browsingContext.activate", context=ctx)
     return ctx
+
+
+def _visible(ctx):
+    """True if the tab is the one shown in a window that is on screen."""
+    try:
+        r = bidi("script.evaluate", expression="document.visibilityState", awaitPromise=False, zh_passive=True,
+                 target={"context": ctx}, _timeout=1.0)
+    except Exception:
+        return False
+    return r.get("result", {}).get("value") == "visible"
+
+
+@contextmanager
+def in_front(target=None):
+    """Show the controlled tab (or `target`) for the duration of the block, then show the
+    user's tab again. Hidden tabs barely run (animation frames stop, timers fire about once
+    a second, IntersectionObserver stalls), so use this for lazy loading, infinite feeds
+    and animations, and keep the block short:
+
+        with in_front():
+            js("window.scrollTo(0, document.body.scrollHeight)"); wait(1)
+
+    The user sees their Zen window switch to this tab, and Zen comes in front of the app
+    they are using; afterwards their tab is back, but Zen stays the active app. If their
+    window was minimized or covered, no tab was showing, so this tab stays."""
+    ctx = _target_id(target) or _ctx()
+    tree = _top_contexts()
+    win = next((c.get("clientWindow") for c in tree if c["context"] == ctx), None)
+    if _visible(ctx):
+        yield ctx
+        return
+    prev = next((c["context"] for c in tree if c["context"] != ctx and c.get("clientWindow") == win
+                 and _visible(c["context"])), None)
+    activate_tab(ctx)
+    try:
+        yield ctx
+    finally:
+        if prev and any(c["context"] == prev for c in _top_contexts()):
+            bidi("browsingContext.activate", context=prev)
 
 
 def switch_tab(target, activate=False):
@@ -528,6 +569,27 @@ def switch_tab(target, activate=False):
     return ctx
 
 
+def _create_tab():
+    """A new background tab at the end of a normal Zen window. Zen puts new tabs in the
+    newest window, which may be a popup such as new_window()'s, so with several windows
+    open, place it after the last tab of the first window that isn't a popup."""
+    params = {"type": "tab", "background": True}
+    if len(bidi("browser.getClientWindows")["clientWindows"]) > 1:
+        windows = {}
+        for c in _top_contexts():
+            windows.setdefault(c.get("clientWindow"), []).append(c["context"])
+        for ctxs in windows.values():
+            try:  # a popup's own page reports no toolbar; check one page per window
+                popup = bidi("script.evaluate", expression="!window.toolbar.visible", awaitPromise=False,
+                             zh_passive=True, target={"context": ctxs[0]}, _timeout=1.0)["result"].get("value")
+            except Exception:
+                popup = False
+            if not popup:
+                params["referenceContext"] = ctxs[-1]
+                break
+    return bidi("browsingContext.create", **params)["context"]
+
+
 def new_tab(url="about:blank"):
     """Open a background tab, control it, and load `url`. Reuses the controlled tab if it is blank."""
     cur = _send({"meta": "current"})["context"]
@@ -536,7 +598,57 @@ def new_tab(url="about:blank"):
         if tree.get(cur) in ("about:blank", "about:newtab", "about:home"):
             goto_url(url)
             return cur
-    ctx = bidi("browsingContext.create", type="tab", background=True)["context"]
+    ctx = _create_tab()
+    switch_tab(ctx)
+    if url != "about:blank":
+        goto_url(url)
+    return ctx
+
+
+_POPUP_JS = """((url, features) => {
+  const b = document.createElement('button');
+  b.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;opacity:0;z-index:2147483647';
+  b.addEventListener('click', e => { e.stopImmediatePropagation(); b.remove(); window.open(url, '_blank', features); });
+  document.documentElement.append(b);
+})"""
+
+
+def new_window(url="about:blank"):
+    """Open a Zen window of the agent's own, control its page, and load `url`.
+
+    Unlike a background tab, this page runs at full speed (animation frames, timers,
+    IntersectionObserver, lazy loading) whenever any part of the window is on screen and
+    not covered by another app's window; Zen's own windows don't count as covering. The
+    user's tabs are never switched. What the user sees: a window opens over their Zen
+    window, same size and place. If Zen was the active app, their window is put back in
+    front so this one waits behind it; otherwise it stays on top of their Zen window,
+    behind the app they are using. close_tab() closes it."""
+    windows = bidi("browser.getClientWindows")["clientWindows"]
+    home = next((w for w in windows if w["active"]), None) or next(
+        (w for w in windows if w["state"] != "minimized"), windows[0])
+    before = {c["context"] for c in _top_contexts()}
+    # Pages may open windows only from a click, so click a throwaway opener tab.
+    opener = _create_tab()
+    try:
+        _evaluate(f"{_POPUP_JS}('about:blank', 'popup,noopener,width={home['width']},height={home['height']}')", opener)
+        _perform(opener, {"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "x": 5, "y": 5}, {"type": "pointerDown", "button": 0},
+            {"type": "pointerUp", "button": 0}]})
+        deadline = time.time() + 10
+        while not (new := [c for c in _top_contexts() if c["context"] not in before | {opener}]):
+            if time.time() > deadline:
+                raise RuntimeError("new_window: Zen did not open the window")
+            time.sleep(0.05)
+    finally:
+        bidi("browsingContext.close", context=opener)
+    ctx, win = new[0]["context"], new[0].get("clientWindow")
+    bidi("browser.setClientWindowState", clientWindow=win, state="normal", x=home["x"], y=home["y"],
+         width=home["width"], height=home["height"])
+    if home["active"]:  # Zen was the active app: give the user's window its focus back
+        shown = next((c["context"] for c in _top_contexts()
+                      if c.get("clientWindow") == home["clientWindow"] and _visible(c["context"])), None)
+        if shown:
+            bidi("browsingContext.activate", context=shown)
     switch_tab(ctx)
     if url != "about:blank":
         goto_url(url)
@@ -556,12 +668,7 @@ def ensure_real_tab():
         if c["context"] == cur:
             return _tab(cur, c["url"])
     for c in tabs:
-        try:
-            r = bidi("script.evaluate", expression="document.visibilityState", awaitPromise=False, zh_passive=True,
-                     target={"context": c["context"]}, _timeout=1.0)
-        except Exception:
-            continue
-        if r.get("result", {}).get("value") == "visible":
+        if _visible(c["context"]):
             switch_tab(c["context"])
             return _tab(c["context"], c["url"])
     if tabs:
