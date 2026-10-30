@@ -80,6 +80,27 @@ class BiDiError(RuntimeError):
     pass
 
 
+class SessionTaken(BiDiError):
+    """Another tool took Zen's session while we connected to Marionette. `client` must stay
+    open until that session ends: closing any Marionette connection ends the open session."""
+
+    def __init__(self, message, client):
+        super().__init__(message)
+        self.client = client
+
+
+def park(cfg, client, poll=1.0):
+    """Hold `client` open until Zen's other session ends (or Zen goes away), then close it."""
+    while True:
+        time.sleep(poll)
+        try:
+            if session_free(cfg):
+                break
+        except Exception:
+            break
+    client.close()
+
+
 def session_free(cfg):
     """True if Zen has no WebDriver session open (BiDi session.status)."""
     with ws_connect(connection.session_url(cfg), open_timeout=10) as ws:
@@ -110,6 +131,12 @@ def marionette_session(cfg, timeout=60.0):
         if not client.ws_url:
             raise marionette.MarionetteError("Zen made a Marionette session without WebDriver BiDi")
     except Exception as e:
+        try:
+            taken = not session_free(cfg)
+        except Exception:
+            taken = False
+        if taken:  # someone took it after our check; closing now would end their session
+            raise SessionTaken("session not created: Maximum number of active sessions", client) from e
         client.close()
         raise BiDiError(str(e)) from e
     return client
@@ -121,7 +148,8 @@ class Session:
         self.marionette = marionette
         self.mode = "marionette" if marionette else "bidi"
         try:
-            self.ws = ws_connect(url, max_size=None, open_timeout=10, ping_interval=None)
+            # Entered by hand: calling connect() directly is deprecated, and we close it ourselves.
+            self.ws = ws_connect(url, max_size=None, open_timeout=10, ping_interval=None).__enter__()
         except Exception:
             if marionette:
                 marionette.close()
@@ -309,7 +337,16 @@ class Session:
             return {"titles": self.titles(req["contexts"])}
         raise ValueError(f"unknown meta op {op!r}")
 
-    def close(self):
+    def close(self, tab_marker=""):
+        if tab_marker and self.current:  # don't leave the "controlled" marker on the user's tab
+            m = json.dumps(tab_marker + " ")
+            try:
+                self.call("script.evaluate", {"expression": f"if(document.title.startsWith({m}))"
+                                              f"document.title=document.title.slice({m}.length)",
+                                              "awaitPromise": False, "target": {"context": self.current},
+                                              "zh_passive": True}, timeout=2)
+            except Exception:
+                pass
         try:
             if self.marionette:
                 # BiDi's session.end refuses sessions made through WebDriver classic.
@@ -371,7 +408,7 @@ def serve(cfg, session, server):
                 if req.get("meta") == "stop":
                     state["stop"] = True
                     unlink_own()
-                    session.close()
+                    session.close(cfg.tab_marker)
                     resp = {"ok": True}
                 elif "meta" in req:
                     resp = session.meta(req)
@@ -401,7 +438,7 @@ def serve(cfg, session, server):
             t.join(timeout=2)
         server.close()
         unlink_own()
-        session.close()
+        session.close(cfg.tab_marker)
 
 
 def main():
@@ -418,6 +455,9 @@ def main():
         err_path(cfg).write_text(msg)
         if session:
             session.close()
+        taken = e if isinstance(e, SessionTaken) else e.__cause__ if isinstance(e.__cause__, SessionTaken) else None
+        if taken:
+            park(cfg, taken.client)  # the error is already reported; keep the other tool's session alive
         sys.exit(1)
     serve(cfg, session, server)
 

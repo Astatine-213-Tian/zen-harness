@@ -8,4 +8,4 @@ Without Marionette, the daemon falls back to a BiDi-only session and ends it on 
 
 ## Consequences
 
-Closing *any* Marionette connection deletes whatever session is open, even another tool's. So the daemon checks BiDi `session.status` and connects to Marionette only while Zen has no session. When a session was just stopped, it waits up to 5 s for it to be released.
+Closing *any* Marionette connection deletes whatever session is open, even another tool's. So the daemon checks BiDi `session.status` and connects to Marionette only while Zen has no session. When a session was just stopped, it waits up to 5 s for it to be released. If another tool still takes the session between that check and our `NewSession`, the daemon reports the error but keeps its Marionette connection open ("parks" it) until that tool's session ends, so it never ends someone else's session.

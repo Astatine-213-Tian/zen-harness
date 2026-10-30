@@ -40,6 +40,8 @@ def ensure_daemon(cfg):
             return
         if proc.poll() is not None:
             raise RuntimeError(err.read_text() if err.exists() else "zen-harness daemon exited at startup")
+        if err.exists() and err.read_text():  # a daemon may report and stay up (see daemon.park)
+            raise RuntimeError(err.read_text())
         time.sleep(0.1)
     proc.terminate()
     raise RuntimeError(f"zen-harness daemon did not start within {START_TIMEOUT:.0f}s")
