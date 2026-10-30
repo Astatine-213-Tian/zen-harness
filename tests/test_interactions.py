@@ -526,3 +526,18 @@ def test_foreground_helpers_are_off_by_default(page):
     for call in ("with in_front(): pass", "new_window('about:blank')"):
         p = page(call, check=False)
         assert p.returncode == 1 and 'foreground = "never"' in p.stderr
+
+
+def test_click_on_new_tab_link_leaves_the_users_view_alone(at):
+    zh = at("tabs.html")
+    out = zh("""
+visible = lambda: sorted(t['targetId'] for t in list_tabs()
+                         if js("document.visibilityState", target_id=t['targetId']) == 'visible')
+before, n = visible(), len(list_tabs())
+click('#report')
+for _ in range(50):
+    if len(list_tabs()) > n: break
+    wait(0.1)
+print(len(list_tabs()) == n + 1, visible() == before, current_tab()['url'].endswith('tabs.html'))
+""")
+    assert out == "True True True"

@@ -36,7 +36,7 @@ with in_front():
 
 ## Tabs opened by the page
 
-Clicking a `target=_blank` link switches Zen to the new tab, and a `window.open` popup opens a window in front: either way the user's view jumps, while the harness keeps controlling the old tab. Open the URL yourself instead:
+`click()` on a link that opens a new tab (`target=_blank`) Cmd-clicks it, so the tab opens in the background and the user's view doesn't jump; the harness keeps controlling the old tab. A page that calls `window.open` from its own script still opens a window in front, and `click_at_xy` on such a link still switches tabs. When you know the URL, open it yourself instead:
 
 ```python
 new_tab(js("document.querySelector('#report').href"))

@@ -324,14 +324,19 @@ def _perform(ctx, *sources):
     bidi("input.performActions", context=ctx, actions=list(sources))
 
 
-def _click(ctx, x, y, button="left", clicks=1):
-    """Click at (x, y) in `ctx`'s own viewport (a frame's context takes frame coordinates)."""
+def _click(ctx, x, y, button="left", clicks=1, background=False):
+    """Click at (x, y) in `ctx`'s own viewport (a frame's context takes frame coordinates).
+    background=True holds Cmd/Ctrl, so a link that opens a new tab opens it in the background."""
     b = _BUTTONS[button]
     acts = [{"type": "pointerMove", "x": round(x), "y": round(y), "origin": "viewport"}]
     for _ in range(clicks):
         acts += [{"type": "pointerDown", "button": b}, {"type": "pointerUp", "button": b}]
-    _perform(ctx, {"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"},
-                   "actions": acts})
+    sources = [{"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": acts}]
+    if background:
+        mod = "\ue03d" if sys.platform == "darwin" else "\ue009"  # Meta / Control
+        sources.append({"type": "key", "id": "keyboard", "actions": [{"type": "keyDown", "value": mod}]
+                        + [{"type": "pause"}] * (len(acts) - 1) + [{"type": "keyUp", "value": mod}]})
+    _perform(ctx, *sources)
 
 
 def click_at_xy(x, y, button="left", clicks=1):
@@ -340,18 +345,24 @@ def click_at_xy(x, y, button="left", clicks=1):
 
 
 def click(selector, timeout=0.0):
-    """Scroll the first element matching `selector` into view and click its centre."""
+    """Scroll the first element matching `selector` into view and click its centre.
+
+    A link that would open a new tab or window (target=_blank etc.) is Cmd/Ctrl-clicked,
+    so the new tab opens in the background instead of switching the user's view; the
+    harness keeps controlling the current tab (find the new one with list_tabs())."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"click: element not found: {selector!r}")
     ctx, el = _locate(selector)
     box = js(f"(()=>{{const e={el};if(!e)return null;"
              "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
-             "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height};})()", target_id=ctx)
+             "const a=e.closest('a[href],area[href]'),t=(a&&a.target||'').toLowerCase();"
+             "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height,"
+             "newTab:!!t&&!['_self','_parent','_top'].includes(t)};})()", target_id=ctx)
     if not box:
         raise RuntimeError(f"click: element not found: {selector!r}")
     if not box["w"] and not box["h"]:
         raise RuntimeError(f"click: element is not displayed: {selector!r}")
-    _click(ctx, box["x"], box["y"])
+    _click(ctx, box["x"], box["y"], background=box["newTab"])
 
 
 def _key_actions(keys):
