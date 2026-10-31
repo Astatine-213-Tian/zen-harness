@@ -519,9 +519,9 @@ print(bool(net and net[0]['request']))
 def test_stop_then_immediate_snippet(zh, env):
     import subprocess, sys
     for i in range(3):
-        assert zh(f"print(js('{i}'))") == str(i)
+        assert zh(f"new_tab(); print(js('{i}'))") == str(i)
         subprocess.run([sys.executable, "-m", "zen_harness.run", "stop"], env=env, capture_output=True, check=True)
-    assert zh("print(js('7'))") == "7"
+    assert zh("new_tab(); print(js('7'))") == "7"
 
 
 def test_foreground_helpers_are_off_by_default(page):

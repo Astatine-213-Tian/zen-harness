@@ -121,4 +121,5 @@ def test_terminated_daemon_releases_the_session(page):
     for p in pids:
         os.kill(p, signal.SIGTERM)
     time.sleep(1.5)
-    assert page("print(js('1 + 1'))") == "2"
+    # A new session starts with no controlled tab (tab ids change between sessions).
+    assert page("new_tab(); print(js('1 + 1'))") == "2"

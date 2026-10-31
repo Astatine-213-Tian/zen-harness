@@ -2,7 +2,11 @@
 
 Domain terms for zen-harness. Use them as written in code, docs, issues and tests.
 
-**Controlled tab**: the tab the harness acts on by default. Agents get one with `new_tab()` or `switch_tab()`; its title carries the tab marker. _Avoid_: current tab, active tab (that is the tab the user sees).
+**Controlled tab**: the tab the harness acts on by default, one per agent. Agents get one with `new_tab()` or `switch_tab()`; helpers never pick one for them. Its title carries the tab marker. _Avoid_: current tab, active tab (that is the tab the user sees).
+
+**Agent id**: the name an agent passes as `ZH_AGENT` to get a controlled tab of its own while other agents use the same Zen. Agents without one share the `""` agent's tab.
+
+**Tab marker**: the 🤖 prefix on the title of every page in a controlled tab, so the user can see which tabs agents hold. Set by the daemon; removed when the session ends.
 
 **Navigation cause**: a call from an action helper (`click`, `type_text`, `press_key`, `js`, `goto_url`, `handle_dialog`, raw `bidi`, ...) that might start a navigation in the tab it targets, or in the tab that contains its frame. Reads by the harness itself are never navigation causes.
 

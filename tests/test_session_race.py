@@ -43,7 +43,7 @@ def test_session_taken_after_our_check_is_left_alone(page, env, monkeypatch):
     if parked:
         parked.join(10)
         assert not parked.is_alive()  # released once the other session ended
-    assert page("print(js('1 + 1'))") == "2"
+    assert page("new_tab(); print(js('1 + 1'))") == "2"
 
 
 def test_marker_survives_the_page_changing_its_title(zh, env):

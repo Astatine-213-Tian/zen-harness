@@ -30,7 +30,7 @@ def test_force_killed_daemon_does_not_lock_zen(page):
         os.kill(p, signal.SIGKILL)
     time.sleep(1)
     assert not daemon_pids()
-    assert page("print(js('1 + 1'))") == "2"
+    assert page("new_tab(); print(js('1 + 1'))") == "2"
 
 
 @pytest.fixture
@@ -63,7 +63,7 @@ def bidi_only_env(env):
 
 def test_attaches_without_marionette(bidi_only_env):
     assert "marionette: off" in doctor(bidi_only_env)
-    p = subprocess.run([sys.executable, "-m", "zen_harness.run"], input="print(js('6 * 7'))",
+    p = subprocess.run([sys.executable, "-m", "zen_harness.run"], input="new_tab(); print(js('6 * 7'))",
                        env=bidi_only_env, capture_output=True, text=True, timeout=120)
     assert p.stdout.strip() == "42", p.stderr
     assert "session is BiDi-only" in doctor(bidi_only_env)
@@ -91,7 +91,7 @@ def test_stop_force_clears_an_orphaned_session(page, env):
     p = cli(env, "stop", "--force")
     assert p.returncode == 0 and "ended Zen's open session" in p.stdout
     assert "even another tool's" in p.stderr  # it warns before acting
-    assert page("print(js('1 + 1'))") == "2"
+    assert page("new_tab(); print(js('1 + 1'))") == "2"
 
 
 def test_stop_force_with_nothing_to_clear(page, env):

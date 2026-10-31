@@ -24,7 +24,7 @@ from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from . import config, connection, marionette, marker, runfiles, settle
+from . import config, connection, controlled, marionette, runfiles, settle
 from . import ipc
 
 CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
@@ -52,8 +52,8 @@ def open_session(cfg):
             time.sleep(0.2)
         client = marionette_session(cfg)
         if client:
-            return Session(client.ws_url, marionette=client)
-        return Session(url)
+            return Session(client.ws_url, marionette=client, tab_marker=cfg.tab_marker)
+        return Session(url, tab_marker=cfg.tab_marker)
     except BiDiError as e:
         if "Maximum number of active sessions" not in str(e):
             raise
@@ -164,7 +164,7 @@ def marionette_session(cfg, timeout=60.0):
 
 
 class Session:
-    def __init__(self, url, session_timeout=60.0, marionette=None):
+    def __init__(self, url, session_timeout=60.0, marionette=None, tab_marker=""):
         """Attach to the BiDi session at `url`; without a `marionette` client holding one, create it."""
         self.marionette = marionette
         self.mode = "marionette" if marionette else "bidi"
@@ -183,7 +183,8 @@ class Session:
         self.inflight = {}  # request id -> context
         self.last_network = {}  # context -> monotonic time of its last network event
         self.started = time.monotonic()
-        self.current = None
+        self.tabs = controlled.ControlledTabs(self.call, tab_marker)
+        self.closing = False
         self.closed = threading.Event()
         threading.Thread(target=self._read, daemon=True).start()
         try:
@@ -269,8 +270,7 @@ class Session:
         elif method == "browsingContext.userPromptClosed":
             summary = {"accepted": p.get("accepted")}
         elif method == "browsingContext.contextDestroyed":
-            if ctx == self.current:
-                self.current = None
+            self.tabs.forget(ctx)
             summary = {"url": p.get("url")}
         elif method.startswith("browsingContext.download"):
             summary = {k: p.get(k) for k in ("url", "suggestedFilename", "status", "filepath") if k in p}
@@ -310,22 +310,22 @@ class Session:
         op = req["meta"]
         if op == "ping":
             return {"ok": True, "mode": self.mode}
+        agent = req.get("agent", "")
         if op == "current":
-            return {"context": self.current}
+            return {"context": self.tabs.get(agent)}
         if op == "set_current":
-            self.current = req["context"]
-            return {"context": self.current}
+            return {"context": self.tabs.control(agent, req["context"])}
         if op == "settle":
-            r = self.pages.wait(req.get("context") or self.current, bool(req.get("need_load")),
+            r = self.pages.wait(req.get("context") or self.tabs.get(agent), bool(req.get("need_load")),
                                 float(req.get("timeout", 15.0)))
             if r["state"] == "dialog":
                 raise ipc.DialogOpen(r["dialog"])
             return {"settled": r["state"] == "settled"}
         if op == "dialog":
-            return {"dialog": self.pages.dialog(req.get("context") or self.current)}
+            return {"dialog": self.pages.dialog(req.get("context") or self.tabs.get(agent))}
         if op == "network":
             # Per tab, so long-polling in the user's other tabs never blocks a wait.
-            ctx = req.get("context") or self.current
+            ctx = req.get("context") or self.tabs.get(agent)
             last = self.last_network.get(ctx, self.started)
             return {"inflight": sum(1 for c in self.inflight.values() if c == ctx),
                     "idle_ms": int((time.monotonic() - last) * 1000)}
@@ -337,14 +337,12 @@ class Session:
             return {"titles": self.titles(req["contexts"])}
         raise ValueError(f"unknown meta op {op!r}")
 
-    def close(self, tab_marker=""):
-        if tab_marker and self.current:  # don't leave the "controlled" marker on the user's tab
-            try:
-                self.call("script.evaluate", {"expression": marker.unmark_js(tab_marker),
-                                              "awaitPromise": False, "target": {"context": self.current}},
-                                             timeout=2)
-            except Exception:
-                pass
+    def close(self):
+        """End the session (once: stop, the serve loop and errors may all call this)."""
+        if self.closing:
+            return
+        self.closing = True
+        self.tabs.release()  # don't leave markers on the user's tabs
         try:
             if self.marionette:
                 # BiDi's session.end refuses sessions made through WebDriver classic.
@@ -404,7 +402,7 @@ def serve(cfg, session, server):
                 if req.get("meta") == "stop":
                     state["stop"] = True
                     unlink_own()
-                    session.close(cfg.tab_marker)
+                    session.close()
                     resp = {"ok": True}
                 elif "meta" in req:
                     resp = session.meta(req)
@@ -435,7 +433,7 @@ def serve(cfg, session, server):
             t.join(timeout=2)
         server.close()
         unlink_own()
-        session.close(cfg.tab_marker)
+        session.close()
 
 
 def take_port_lock(cfg, timeout=ipc.START_TIMEOUT):

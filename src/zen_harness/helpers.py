@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import config, ipc, marker
+from . import config, ipc
 from .ipc import BrowserError, DialogOpen, HarnessError  # noqa: F401 (for snippets)
 
 CFG = config.load()
@@ -27,6 +27,8 @@ INTERNAL = ("about:", "chrome:", "moz-extension:", "resource:", "view-source:")
 
 
 def _send(req, timeout=60.0):
+    if "meta" in req:
+        req = {"agent": CFG.agent, **req}  # each agent has its own controlled tab
     return ipc.send(CFG, req, timeout=timeout)
 
 
@@ -56,10 +58,9 @@ def _ctx():
     ctx = _send({"meta": "current"})["context"]
     if ctx:
         return ctx
-    tab = ensure_real_tab()
-    if not tab:
-        raise HarnessError("no tab to control; call new_tab(url) first")
-    return tab["targetId"]
+    # Never fall back to the tab the user is looking at: taking it over must be explicit.
+    raise HarnessError("no tab is controlled: open one with new_tab(url), or take the tab the user "
+                       "is looking at with ensure_real_tab()")
 
 
 def _tab(ctx, url, title=""):
@@ -341,7 +342,6 @@ def goto_url(url, leave=False, save_wait=10.0):
     ctx = _ctx()
     _leave_page(ctx, leave, save_wait)
     r = bidi("browsingContext.navigate", context=ctx, url=url, wait="interactive", _timeout=60)
-    _mark(ctx)
     out = {"url": r.get("url", url)}
     if os.environ.get("ZH_DOMAIN_SKILLS") == "1":
         site = (urlparse(url).hostname or "").removeprefix("www.").split(".")[0]
@@ -571,22 +571,6 @@ def current_tab():
     raise HarnessError("the controlled tab is gone; call ensure_real_tab() or new_tab()")
 
 
-def _mark(ctx):
-    if CFG.tab_marker:
-        try:
-            _evaluate(marker.mark_js(CFG.tab_marker), ctx, activate=False)
-        except Exception:
-            pass
-
-
-def _unmark(ctx):
-    if CFG.tab_marker and ctx:
-        try:
-            _evaluate(marker.unmark_js(CFG.tab_marker), ctx, activate=False)
-        except Exception:
-            pass
-
-
 def activate_tab(target):
     """Bring a tab to the front in Zen, and Zen in front of other apps. Leaves it there;
     prefer `with in_front():`, which puts the user's tab back afterwards."""
@@ -649,12 +633,7 @@ def in_front(target=None):
 def switch_tab(target, activate=False):
     """Make `target` the tab helpers act on, without changing Zen's visible tab by default.
     The tab-title marker moves with it so the user can see which tab is controlled."""
-    ctx = _target_id(target)
-    old = _send({"meta": "current"})["context"]
-    if old and old != ctx:
-        _unmark(old)
-    _send({"meta": "set_current", "context": ctx})
-    _mark(ctx)
+    ctx = _send({"meta": "set_current", "context": _target_id(target)})["context"]
     if activate:
         activate_tab(ctx)
     return ctx
@@ -801,10 +780,7 @@ def wait_for_load(timeout=15.0):
     navigates, this waits for the new page rather than returning on the old one.
     Raises DialogOpen at once if a dialog (e.g. "leave page?") blocks the tab."""
     ctx = _ctx()
-    if not _settle(ctx, True, timeout):
-        return False
-    _mark(ctx)  # a new document after a click or js() navigation
-    return True
+    return _settle(ctx, True, timeout)
 
 
 def wait_for_element(selector, timeout=10.0, visible=False):
@@ -820,7 +796,6 @@ def wait_for_element(selector, timeout=10.0, visible=False):
         try:
             where, el = _locate(selector)
             if _evaluate(check % el, where):
-                _mark(ctx)  # a new document after a navigation
                 return True
         except DialogOpen:
             raise

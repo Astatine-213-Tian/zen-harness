@@ -60,4 +60,14 @@ switch_tab(me)
 
 ## After closing the controlled tab
 
-Closing the controlled tab leaves none controlled, and the next helper call quietly adopts the tab the user is looking at (`ensure_real_tab`). Call `new_tab(...)` or `switch_tab(...)` right after `close_tab()` so you never act on the user's own tab. `close_tab` does not wait for `beforeunload` prompts.
+Closing the controlled tab leaves none controlled, and helpers that need a tab raise "no tab is controlled" until you call `new_tab(...)` or `switch_tab(...)`. They never fall back to the tab the user is looking at; `ensure_real_tab()` takes it on purpose. A new session (after `zen-harness stop` or the idle timeout) also starts with none: tab ids change between sessions, so find your tab again with `list_tabs()` and `switch_tab(...)`, or open a new one. `close_tab` does not wait for `beforeunload` prompts.
+
+## Several agents at once
+
+Each agent that sets `ZH_AGENT=<name>` has its own controlled tab; `new_tab`, `switch_tab` and every helper use that agent's tab, and each controlled tab carries the 🤖 marker. Agents without `ZH_AGENT` share one controlled tab, so one agent's `new_tab()` would redirect the other's clicks.
+
+```bash
+ZH_AGENT=flights zen-harness <<'PY'
+new_tab("https://www.expedia.com/"); wait_for_load()
+PY
+```
