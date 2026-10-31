@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import config, ipc
+from . import config, ipc, marker
 
 CFG = config.load()
 INTERNAL = ("about:", "chrome:", "moz-extension:", "resource:", "view-source:")
@@ -562,18 +562,16 @@ def current_tab():
 
 def _mark(ctx):
     if CFG.tab_marker:
-        m = json.dumps(CFG.tab_marker + " ")
         try:
-            _evaluate(f"if(!document.title.startsWith({m}))document.title={m}+document.title", ctx, passive=True)
+            _evaluate(marker.mark_js(CFG.tab_marker), ctx, passive=True, activate=False)
         except Exception:
             pass
 
 
 def _unmark(ctx):
     if CFG.tab_marker and ctx:
-        m = json.dumps(CFG.tab_marker + " ")
         try:
-            _evaluate(f"if(document.title.startsWith({m}))document.title=document.title.slice({m}.length)", ctx, passive=True)
+            _evaluate(marker.unmark_js(CFG.tab_marker), ctx, passive=True, activate=False)
         except Exception:
             pass
 
@@ -813,6 +811,7 @@ def wait_for_load(timeout=15.0):
     while time.time() < deadline:
         try:
             if _settled(ctx, need_load=True) and js("document.readyState", _passive=True) == "complete":
+                _mark(ctx)  # a new document after a click or js() navigation
                 return True
         except RuntimeError:
             pass  # mid-navigation
@@ -834,6 +833,7 @@ def wait_for_element(selector, timeout=10.0, visible=False):
             if _settled(ctx, need_load=False):
                 where, el = _locate(selector)
                 if js(check % el, target_id=where, _passive=True):
+                    _mark(ctx)  # a new document after a navigation
                     return True
         except RuntimeError:
             pass

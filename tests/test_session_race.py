@@ -44,9 +44,19 @@ def test_session_taken_after_our_check_is_left_alone(page, env, monkeypatch):
     assert page("print(js('1 + 1'))") == "2"
 
 
+def test_marker_survives_the_page_changing_its_title(zh, env):
+    url = FIXTURE + "#retitle-test"
+    zh(f"new_tab({url!r}); wait_for_load()")
+    out = zh("js(\"document.title = 'Renamed'\"); wait(0.2); print(js('document.title'))")
+    assert out == "\U0001F916 Renamed"
+    run(env, "stop")  # and stop takes it off for good
+    out = zh(f"print([t['title'] for t in list_tabs() if t['url'] == {url!r}])")
+    assert out == "['Renamed']"
+
+
 def test_stop_removes_the_tab_marker(zh, env):
     url = FIXTURE + "#marker-test"  # tab ids change between sessions, so find the tab by URL
     zh(f"new_tab({url!r}); wait_for_load()")
-    assert zh("print(current_tab()['title'])") == "\U0001F434 Fixture"
+    assert zh("print(current_tab()['title'])") == "\U0001F916 Fixture"
     run(env, "stop")
     assert zh(f"print([t['title'] for t in list_tabs() if t['url'] == {url!r}])") == "['Fixture']"

@@ -32,7 +32,7 @@ If a plain HTTP request can read it (a public page, an API, docs), use `curl` or
 ## Working on a page
 
 - First navigation is `new_tab(url)`. It opens a background tab, so the user's visible tab stays put. Keep your effect on the user's machine minimal: never bring Zen, a tab or a window to the front on your own. Hidden tabs are throttled; if lazy loading, a feed or an animation stalls, first work without showing anything (read the data with `js()`/`fetch` or the site's API, page through URLs, `scroll()`). `in_front()` and `new_window(url)` are off unless the user set `foreground = "allow"`; if a page truly needs to be visible, ask the user (`zen-harness notes tabs`). Call `activate_tab(...)` only when the user asks to see a tab.
-- The controlled tab's title starts with 🐴 so the user can see which tab you hold.
+- The controlled tab's title starts with 🤖 so the user can see which tab you hold.
 - After a navigation or a click that loads a page, call `wait_for_load()`; it waits for the new page, not the one you left. On single-page apps use `wait_for_element(...)`.
 - Find controls with `snapshot()` first: a whole GitHub repo page is ~100 lines (~750 tokens). Narrow it with `snapshot("star")` or `snapshot(within="form")`, then act on the ref: `click("@e3")`, `fill_input("@e7", "Toronto")`. Refs last until the next `snapshot()` or navigation, so snapshot again after the page changes.
 - For text and data (prices, lists, tables) use `js(...)` and print only what you need. Do not print whole pages.

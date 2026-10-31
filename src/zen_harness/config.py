@@ -31,7 +31,7 @@ class Config:
     headless: bool = False
     idle_timeout: int = 1800  # seconds; 0 keeps the session forever
     workspace: str = str(Path.home() / ".zen-harness")
-    tab_marker: str = "\U0001F434"
+    tab_marker: str = "\U0001F916"  # 🤖, like Zen's own remote-control icon
     # never: in_front() and new_window() refuse, so agents can't put anything in front of
     # the user. allow: they may (the user sees a tab switch or a new window).
     foreground: str = "never"

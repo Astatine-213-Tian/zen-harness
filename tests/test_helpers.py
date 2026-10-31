@@ -14,7 +14,7 @@ def value(out):
 def test_new_tab_marks_and_reports_page(page):
     info = value(page("print(page_info())"))
     assert info["url"] == FIXTURE
-    assert info["title"] == "\U0001F434 Fixture"
+    assert info["title"] == "\U0001F916 Fixture"
     assert info["ph"] > info["h"]
 
 

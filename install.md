@@ -109,7 +109,7 @@ PY
 zen-harness stop
 ```
 
-Expected: `🐴 Example Domain` and one line like `@e1 link "Learn more"`. Tell the user setup is done and give one example of what they can now ask, e.g. "Search Expedia for flights from Toronto to Tokyo next month."
+Expected: `🤖 Example Domain` and one line like `@e1 link "Learn more"`. Tell the user setup is done and give one example of what they can now ask, e.g. "Search Expedia for flights from Toronto to Tokyo next month."
 
 ## If something fails
 

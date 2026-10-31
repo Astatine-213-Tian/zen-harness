@@ -73,7 +73,7 @@ marionette_port = 0           # Marionette port when the harness starts Zen; 0 =
 headless = false
 idle_timeout = 1800           # seconds without calls before the session is released; 0 = never
 workspace = "~/.zen-harness"
-tab_marker = "🐴"             # prefix on the controlled tab's title; "" to disable
+tab_marker = "🤖"             # prefix on the controlled tab's title; "" to disable
 foreground = "never"          # or "allow": let agents show a tab or window (in_front, new_window)
 ```
 
@@ -128,7 +128,7 @@ zen_data_dir = "~/Library/Application Support/Firefox"
 
 `relaunch` quits whichever app holds `zen_path` (it reads the bundle id from the app's `Info.plist`), so it never quits Zen when you configure Firefox. The test suite has not been run against Firefox yet (`ZH_ZEN_PATH=/Applications/Firefox.app/Contents/MacOS/firefox uv run pytest -q` does it).
 
-**Is it safe to point at my real browser?** The agent can do anything you can do in that browser, so use it with agents and tasks you trust. It works in tabs it opens, marks the tab it controls with 🐴, and the bundled skill tells agents to stop at passwords, payments and MFA.
+**Is it safe to point at my real browser?** The agent can do anything you can do in that browser, so use it with agents and tasks you trust. It works in tabs it opens, marks the tab it controls with 🤖, and the bundled skill tells agents to stop at passwords, payments and MFA.
 
 **Windows or Linux?** Not yet; process and profile handling is macOS-only today.
 

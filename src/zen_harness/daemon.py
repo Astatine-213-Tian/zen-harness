@@ -23,7 +23,7 @@ from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from . import config, connection, marionette
+from . import config, connection, marionette, marker
 
 CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
 EVENTS = [
@@ -376,10 +376,8 @@ class Session:
 
     def close(self, tab_marker=""):
         if tab_marker and self.current:  # don't leave the "controlled" marker on the user's tab
-            m = json.dumps(tab_marker + " ")
             try:
-                self.call("script.evaluate", {"expression": f"if(document.title.startsWith({m}))"
-                                              f"document.title=document.title.slice({m}.length)",
+                self.call("script.evaluate", {"expression": marker.unmark_js(tab_marker),
                                               "awaitPromise": False, "target": {"context": self.current},
                                               "zh_passive": True}, timeout=2)
             except Exception:

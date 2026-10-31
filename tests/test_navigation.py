@@ -7,13 +7,13 @@ def test_wait_for_load_after_click_waits_for_the_new_page(at, site):
     zh = at("tabs.html")
     zh(f"js(\"document.getElementById('next').href = {site + '/slow.html?ms=800'!r}\")")
     out = zh("click('#next'); print(wait_for_load(), js('document.title'))")
-    assert out == "True Slow page"
+    assert out == "True \U0001F916 Slow page"  # re-marked after the navigation
 
 
 def test_wait_for_load_after_js_navigation(at, site):
     zh = at("tabs.html")
     out = zh(f"js(\"location.href = {site + '/slow.html?ms=600'!r}\"); print(wait_for_load(), js('document.title'))")
-    assert out == "True Slow page"
+    assert out == "True \U0001F916 Slow page"  # re-marked after the navigation
 
 
 def test_wait_for_element_looks_at_the_new_page(at, site):
@@ -21,7 +21,7 @@ def test_wait_for_element_looks_at_the_new_page(at, site):
     zh = at("tabs.html")
     zh(f"js(\"document.getElementById('next').href = {site + '/slow.html?ms=600'!r}\")")
     out = zh("click('#next'); print(wait_for_element('a', timeout=10), js('document.title'))")
-    assert out == "True Slow page"
+    assert out == "True \U0001F916 Slow page"  # re-marked after the navigation
 
 
 def test_wait_for_load_is_quick_when_nothing_navigates(page):

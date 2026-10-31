@@ -106,4 +106,4 @@ ref = snapshot('go top').splitlines()[-1].split()[0]
 click(ref)
 print(wait_for_load(), js('document.title'))
 """)
-    assert out == "True Slow page"
+    assert out == "True \U0001F916 Slow page"  # re-marked after the navigation
