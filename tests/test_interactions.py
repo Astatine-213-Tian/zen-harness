@@ -10,15 +10,6 @@ from conftest import ROOT
 NOTES = ROOT / "src/zen_harness/interaction-skills"
 UPLOAD_FILE_URL = (ROOT / "tests/fixtures/upload.html").as_uri()
 
-# Shared JS for open shadow roots, as in the shadow-dom note.
-DEEP = """function zhDeep(sel, root = document) {
-  const hit = root.querySelector(sel); if (hit) return hit;
-  for (const el of root.querySelectorAll('*'))
-    if (el.shadowRoot) { const h = zhDeep(sel, el.shadowRoot); if (h) return h; }
-  return null;
-}
-"""
-
 IMPORTS = 'import base64, json\nfrom pathlib import Path\n'
 
 
@@ -124,14 +115,12 @@ def test_fill_input_replaces_contenteditable_text(at):
 # --- shadow DOM ---
 
 def test_shadow_dom_click_type_and_closed_root(at):
+    # Plain CSS reaches into open shadow roots (web components); closed roots need coordinates.
     zh = at("shadow.html")
-    assert "not found" in zh("click('#star')", check=False).stderr
-    out = zh(f"DEEP = {DEEP!r}\n" + """
-box = js(DEEP + "const e = zhDeep('#star'); const r = e.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}")
-click_at_xy(box['x'], box['y'])
+    out = zh("""
+click('#star')
 """ + text("#out") + """
-js(DEEP + "zhDeep('#q').focus()")
-type_text('zen')
+fill_input('#q', 'zen')
 """ + text("#out") + """
 print(js("document.querySelector('#closed').shadowRoot"))
 r = js("const r = document.querySelector('#closed').getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}")

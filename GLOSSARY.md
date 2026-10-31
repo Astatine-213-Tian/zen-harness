@@ -8,6 +8,8 @@ Domain terms for zen-harness. Use them as written in code, docs, issues and test
 
 **Tab marker**: the 🤖 prefix on the title of every page in a controlled tab, so the user can see which tabs agents hold. Set by the daemon; removed when the session ends.
 
+**Snapshot ref**: a name like `@e3` (or `@f1e3` inside frame 1) that `snapshot()` gives a control, usable as a selector by every helper. Valid until the next `snapshot()` or until its document is replaced; then it raises `NotFound`.
+
 **Navigation cause**: a call from an action helper (`click`, `type_text`, `press_key`, `js`, `goto_url`, `handle_dialog`, raw `bidi`, ...) that might start a navigation in the tab it targets, or in the tab that contains its frame. Reads by the harness itself are never navigation causes.
 
 **Grace period**: how long a navigation cause gets to show up as a navigation (300 ms) before its tab counts as settled without one.

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -129,33 +130,128 @@ def js(expression, target_id=None):
 
 
 # Finds the first match for a CSS selector, looking inside open shadow roots too.
-_DEEP = ("((s)=>{const f=r=>{let e=r.querySelector(s);if(e)return e;"
-         "for(const h of r.querySelectorAll('*'))if(h.shadowRoot&&(e=f(h.shadowRoot)))return e;"
-         "return null};return f(document)})")
+# --- finding elements ---
+
+class NotFound(HarnessError):
+    """No element matches the selector, or a snapshot ref is stale (take a new snapshot())."""
 
 
-def _ref_css(selector):
-    """'@e3' / '@f1e3' -> the CSS for that snapshot ref; anything else is already CSS."""
-    return f'[data-zh-ref="{selector[1:]}"]' if selector.startswith("@") else selector
+class NotDisplayed(HarnessError):
+    """The element exists but has no box on the page to act on."""
 
 
-def _q(selector):
-    """JS expression for the element matching a CSS selector or a snapshot ref like '@e3'."""
-    if selector.startswith("@"):
-        return f"{_DEEP}({json.dumps(_ref_css(selector))})"
-    return f"document.querySelector({json.dumps(selector)})"
+@dataclass(frozen=True)
+class _Element:
+    """An element _on_element found: its context and BiDi handle, valid within one helper call."""
+    ctx: str
+    shared_id: str
 
 
-def _locate(selector):
-    """(context, JS expression for the element). Frame refs like '@f1e3' resolve in
-    their frame's context (recorded by the last snapshot); everything else in the tab."""
+# One finder for every helper. A selector is CSS or a snapshot ref (its data-zh-ref CSS); it
+# matches in the document first, then inside open shadow roots (web components). The action
+# runs in the same call, on the element found; its arguments travel as BiDi values, never
+# pasted into the source.
+_ON_ELEMENT_JS = """(target, displayed, ...args) => {
+  let e = target;
+  if (typeof target === 'string') {
+    const deep = root => {
+      let f = root.querySelector(target);
+      if (f) return f;
+      for (const h of root.querySelectorAll('*')) if (h.shadowRoot && (f = deep(h.shadowRoot))) return f;
+      return null;
+    };
+    try { e = deep(document); } catch (err) { return ['badselector', String(err.message)]; }
+  }
+  if (!e) return ['notfound'];
+  if (displayed) {
+    const r = e.getBoundingClientRect();
+    if ((!r.width && !r.height) || getComputedStyle(e).visibility === 'hidden') return ['hidden'];
+  }
+  return ['ok', e, (%s)(e, ...args)];
+}"""
+
+_REF = re.compile(r"@(f\d+)?e\d+")
+
+
+def _local(v):
+    """Python value -> BiDi argument (the reverse of _value)."""
+    if isinstance(v, _Element):
+        return {"sharedId": v.shared_id}
+    if v is None:
+        return {"type": "null"}
+    if isinstance(v, bool):
+        return {"type": "boolean", "value": v}
+    if isinstance(v, (int, float)):
+        return {"type": "number", "value": v}
+    if isinstance(v, str):
+        return {"type": "string", "value": v}
+    if isinstance(v, (list, tuple)):
+        return {"type": "array", "value": [_local(x) for x in v]}
+    if isinstance(v, dict):
+        return {"type": "object", "value": [[k, _local(x)] for k, x in v.items()]}
+    raise TypeError(f"can't pass {type(v).__name__} to the page")
+
+
+def _resolve(selector):
+    """(context, what to find there). Frame refs like '@f1e3' resolve in their frame's context,
+    recorded by the last snapshot(); everything else in the controlled tab."""
     ctx = _ctx()
-    m = re.fullmatch(r"@(f\d+)e\d+", selector)
-    if m:
+    if not selector.startswith("@"):
+        return ctx, selector
+    m = _REF.fullmatch(selector)
+    if not m:
+        raise ValueError(f"{selector!r} is not a snapshot ref like '@e3' or '@f1e3'")
+    if m[1]:
         ctx = _evaluate(f"window.__zhFrames?.{m[1]}", ctx)
         if not ctx:
-            raise HarnessError(f"no frame for {selector!r}; take a new snapshot()")
-    return ctx, _q(selector)
+            raise NotFound(f"no frame for {selector!r}; take a new snapshot()")
+    return ctx, f'[data-zh-ref="{selector[1:]}"]'
+
+
+def _find_and_run(target, fn, args, who, displayed, navigates):
+    if isinstance(target, _Element):
+        ctx, what, name = target.ctx, target, "the element"
+    else:
+        (ctx, what), name = _resolve(target), repr(target)
+    hint = "; take a new snapshot()" if name.startswith("'@") else ""
+    try:
+        r = _bidi("script.callFunction", _navigates=navigates, functionDeclaration=_ON_ELEMENT_JS % fn,
+                  target={"context": ctx}, arguments=[_local(what), _local(displayed), *map(_local, args)],
+                  awaitPromise=True, resultOwnership="none", userActivation=navigates,
+                  serializationOptions={"maxObjectDepth": 20, "maxDomDepth": 0})
+    except BrowserError as e:
+        if e.code in ("no such node", "no such frame"):  # its document or frame went away
+            raise NotFound(f"{who}: element not found: {name}{hint}") from None
+        raise
+    if r.get("type") == "exception":
+        d = r.get("exceptionDetails", {})
+        raise HarnessError(f"{who}: JS error: {d.get('text') or _value(d.get('exception', {}))}")
+    tag, *rest = _value(r["result"])
+    if tag == "badselector":
+        raise ValueError(f"{who}: invalid selector {name}: {rest[0]}")
+    if tag == "notfound":
+        raise NotFound(f"{who}: element not found: {name}{hint}")
+    if tag == "hidden":
+        raise NotDisplayed(f"{who}: element is not displayed: {name}")
+    node, value = rest
+    return _Element(ctx, node["sharedId"]), value
+
+
+def _on_element(target, fn, *args, who, displayed=False, timeout=0.0, navigates=False):
+    """Find `target` (CSS, a snapshot ref, or an _Element) and run the JS function `fn(el, ...args)`
+    on it, in one call. Returns (element, fn's value). Raises NotFound or NotDisplayed (with
+    displayed=True), ValueError for a bad selector. With timeout > 0 it keeps looking, on the new
+    page if the last action navigated, until the element is there (and displayed)."""
+    deadline = time.time() + timeout
+    while True:
+        if timeout > 0:
+            _settle(_ctx(), False, max(0.0, deadline - time.time()))
+        try:
+            return _find_and_run(target, fn, args, who, displayed, navigates)
+        except (NotFound, NotDisplayed, BrowserError):  # BrowserError: e.g. mid-navigation
+            if time.time() >= deadline:
+                raise
+        time.sleep(0.1)
 
 
 _SNAPSHOT_JS = r"""
@@ -408,6 +504,17 @@ def click_at_xy(x, y, button="left", clicks=1):
     _click(_ctx(), x, y, button, clicks)
 
 
+_CLICK_FN = """(e) => {
+  e.scrollIntoView({block: 'center', inline: 'center'});
+  const r = e.getBoundingClientRect();
+  const a = e.closest('a[href],area[href]'), t = (a && a.target || '').toLowerCase();
+  const newTab = !!t && !['_self', '_parent', '_top'].includes(t);
+  return {x: r.left + r.width / 2, y: r.top + r.height / 2, newTab,
+          leaves: !!a && !newTab && !a.hasAttribute('download') && !/^(javascript|mailto|tel|sms):/i.test(a.href)
+                  && a.href.split('#')[0] !== location.href.split('#')[0]};
+}"""
+
+
 def click(selector, timeout=0.0, leave=False, save_wait=10.0):
     """Scroll the first element matching `selector` into view and click its centre.
 
@@ -416,23 +523,10 @@ def click(selector, timeout=0.0, leave=False, save_wait=10.0):
     harness keeps controlling the current tab (find the new one with list_tabs()).
     A link to another page is handled like goto_url: unsaved changes get `save_wait` s to
     save, then UnsavedChanges unless leave=True."""
-    if timeout > 0 and not wait_for_element(selector, timeout=timeout):
-        raise HarnessError(f"click: element not found: {selector!r}")
-    ctx, el = _locate(selector)
-    box = js(f"(()=>{{const e={el};if(!e)return null;"
-             "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
-             "const a=e.closest('a[href],area[href]'),t=(a&&a.target||'').toLowerCase();"
-             "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height,"
-             "newTab:!!t&&!['_self','_parent','_top'].includes(t),"
-             "leaves:!!a&&!(t&&!['_self','_parent','_top'].includes(t))&&!a.hasAttribute('download')&&!/^(javascript|mailto|tel|sms):/i.test(a.href)"
-             "&&a.href.split('#')[0]!==location.href.split('#')[0]};})()", target_id=ctx)
-    if not box:
-        raise HarnessError(f"click: element not found: {selector!r}")
-    if not box["w"] and not box["h"]:
-        raise HarnessError(f"click: element is not displayed: {selector!r}")
+    el, box = _on_element(selector, _CLICK_FN, who="click", displayed=True, timeout=timeout)
     if box["leaves"]:
-        _leave_page(ctx, leave, save_wait)
-    _click(ctx, box["x"], box["y"], background=box["newTab"])
+        _leave_page(el.ctx, leave, save_wait)
+    _click(el.ctx, box["x"], box["y"], background=box["newTab"])
 
 
 def _key_actions(keys):
@@ -469,33 +563,44 @@ def press_key(key, modifiers=0):
     _keys(_ctx(), _press_actions(key, modifiers))
 
 
+_FOCUS_FN = """(e) => {
+  e.focus();
+  if (e.isContentEditable) {  // put the caret at the end
+    const r = document.createRange();
+    r.selectNodeContents(e);
+    r.collapse(false);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  }
+}"""
+_INPUT_CHANGE_FN = """(e) => {
+  e.dispatchEvent(new Event('input', {bubbles: true}));
+  e.dispatchEvent(new Event('change', {bubbles: true}));
+}"""
+_KEY_EVENT_FN = """(e, type, key, code) => {
+  e.focus();
+  e.dispatchEvent(new KeyboardEvent(type, {key, code: key, keyCode: code, which: code, bubbles: true}));
+}"""
+
+
 def fill_input(selector, text, clear_first=True, timeout=0.0):
     """Fill a framework-managed input (React, Vue, ...): focus, clear, type with real
     key events, then fire input+change so the framework sees the new value."""
-    if timeout > 0 and not wait_for_element(selector, timeout=timeout):
-        raise HarnessError(f"fill_input: element not found: {selector!r}")
-    ctx, el = _locate(selector)
-    if not js(f"(()=>{{const e={el};"
-              "if(!e)return false;e.focus();if(e.isContentEditable){const r=document.createRange();"
-              "r.selectNodeContents(e);r.collapse(false);getSelection().removeAllRanges();"
-              "getSelection().addRange(r);}return true;})()", target_id=ctx):
-        raise HarnessError(f"fill_input: element not found: {selector!r}")
+    el, _ = _on_element(selector, _FOCUS_FN, who="fill_input", timeout=timeout)
     if clear_first:
-        _keys(ctx, _press_actions("a", 4 if sys.platform == "darwin" else 2))
-        _keys(ctx, _press_actions("Backspace"))
-    _keys(ctx, _text_actions(text))
-    js(f"(()=>{{const e={el};if(!e)return;"
-       "e.dispatchEvent(new Event('input',{bubbles:true}));"
-       "e.dispatchEvent(new Event('change',{bubbles:true}));})()", target_id=ctx)
+        _keys(el.ctx, _press_actions("a", 4 if sys.platform == "darwin" else 2))
+        _keys(el.ctx, _press_actions("Backspace"))
+    _keys(el.ctx, _text_actions(text))
+    try:
+        _on_element(el, _INPUT_CHANGE_FN, who="fill_input", navigates=True)
+    except NotFound:
+        pass  # the page replaced the input while it was typed into
 
 
 def dispatch_key(selector, key="Enter", event="keypress"):
     """Dispatch a synthetic DOM KeyboardEvent on an element (for sites that ignore real keys)."""
     kc = {"Enter": 13, "Tab": 9, "Escape": 27, "Backspace": 8, " ": 32}.get(key, ord(key) if len(key) == 1 else 0)
-    ctx, el = _locate(selector)
-    js(f"(()=>{{const e={el};if(e){{e.focus();"
-       f"e.dispatchEvent(new KeyboardEvent({json.dumps(event)},{{key:{json.dumps(key)},"
-       f"code:{json.dumps(key)},keyCode:{kc},which:{kc},bubbles:true}}));}}}})()", target_id=ctx)
+    _on_element(selector, _KEY_EVENT_FN, event, key, kc, who="dispatch_key", navigates=True)
 
 
 def scroll(x, y, dy=-300, dx=0):
@@ -513,27 +618,30 @@ def scroll(x, y, dy=-300, dx=0):
       (e&&e!==document.documentElement?e:window).scrollBy({dx},{dy});}})()""", ctx)
 
 
+_SET_FILES_FN = """(e, files) => {
+  const dt = new DataTransfer();
+  for (const [name, type, b64] of files)
+    dt.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], name, {type}));
+  e.files = dt.files;
+  e.dispatchEvent(new Event('input', {bubbles: true}));
+  e.dispatchEvent(new Event('change', {bubbles: true}));
+}"""
+
+
 def upload_file(selector, path):
     """Set files on an <input type=file>. `path` is an absolute path or a list of them."""
-    ctx, el = _locate(selector)
-    nodes = bidi("browsingContext.locateNodes", context=ctx,
-                 locator={"type": "css", "value": _ref_css(selector)}, maxNodeCount=1)["nodes"]
-    if not nodes:
-        raise HarnessError(f"upload_file: no element for {selector!r}")
+    el, _ = _on_element(selector, "(e) => null", who="upload_file")
     files = [path] if isinstance(path, str) else list(path)
     try:
-        bidi("input.setFiles", context=ctx, element={"sharedId": nodes[0]["sharedId"]}, files=files)
-    except RuntimeError as e:
+        _bidi("input.setFiles", _navigates=True, context=el.ctx, element={"sharedId": el.shared_id}, files=files)
+    except BrowserError as e:
         # Firefox can only add files from the parent process when dom.file.createInChild
         # is on (automation prefs set it); otherwise build the files inside the page.
         if "Failed to add file" not in str(e):
             raise
-        payload = json.dumps([[Path(f).name, mimetypes.guess_type(f)[0] or "application/octet-stream",
-                               base64.b64encode(Path(f).read_bytes()).decode()] for f in files])
-        js(f"""(()=>{{const e={el};const dt=new DataTransfer();
-          for(const [n,t,b] of {payload})dt.items.add(new File([Uint8Array.from(atob(b),c=>c.charCodeAt(0))],n,{{type:t}}));
-          e.files=dt.files;e.dispatchEvent(new Event('input',{{bubbles:true}}));
-          e.dispatchEvent(new Event('change',{{bubbles:true}}));}})()""", target_id=ctx)
+        payload = [[Path(f).name, mimetypes.guess_type(f)[0] or "application/octet-stream",
+                    base64.b64encode(Path(f).read_bytes()).decode()] for f in files]
+        _on_element(el, _SET_FILES_FN, payload, who="upload_file", navigates=True)
 
 
 # --- visual ---
@@ -784,27 +892,14 @@ def wait_for_load(timeout=15.0):
 
 
 def wait_for_element(selector, timeout=10.0, visible=False):
-    """Poll until querySelector(selector) exists (and is visible if asked). True if found.
-    Like wait_for_load, it looks at the new page when the last action navigated."""
-    check = ("(()=>{const e=%s;if(!e)return false;"
-             + ("const r=e.getBoundingClientRect();const s=getComputedStyle(e);"
-                "return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';"
-                if visible else "return true;") + "})()")
-    ctx = _ctx()
-    deadline = time.time() + timeout
-    while _settle(ctx, False, deadline - time.time()):
-        try:
-            where, el = _locate(selector)
-            if _evaluate(check % el, where):
-                return True
-        except DialogOpen:
-            raise
-        except RuntimeError:
-            pass  # e.g. the document went away mid-check
-        if time.time() >= deadline:
-            break
-        time.sleep(0.1)
-    return False
+    """Wait until an element matches `selector` (CSS or a snapshot ref; displayed too if
+    visible=True). True if found. Like wait_for_load, it looks at the new page when the last
+    action navigated. A malformed selector raises ValueError at once."""
+    try:
+        _on_element(selector, "(e) => null", who="wait_for_element", displayed=visible, timeout=timeout)
+        return True
+    except (NotFound, NotDisplayed, BrowserError):
+        return False
 
 
 def wait_for_network_idle(timeout=10.0, idle_ms=500):
