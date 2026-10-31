@@ -6,10 +6,13 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from websockets.sync.client import connect as ws_connect
 
 from conftest import FIXTURE, PORT, kill_profile
-from zen_harness import config, connection, daemon
+from zen_harness import config, connection, lease
+
+real_is_free = lease._is_free
 
 
 def run(env, *args):
@@ -23,26 +26,22 @@ def test_session_taken_after_our_check_is_left_alone(page, env, monkeypatch):
     with ws_connect(f"ws://127.0.0.1:{PORT}/session", open_timeout=10) as other:
         other.send(json.dumps({"id": 1, "method": "session.new", "params": {"capabilities": {}}}))
         assert json.loads(other.recv(10))["type"] == "success"
-        # ...right after our "is Zen free?" check said yes.
-        checks = iter([True])
-        monkeypatch.setattr(daemon, "session_free", lambda c: next(checks, False))
-        try:
-            daemon.marionette_session(cfg)
-            raise AssertionError("expected the session request to fail")
-        except daemon.BiDiError as e:
-            client = getattr(e, "client", None)
-        monkeypatch.undo()
-        parked = threading.Thread(target=daemon.park, args=(cfg, client, 0.2)) if client else None
-        if parked:
-            parked.start()
+        # ...right after both our "is Zen free?" checks said yes.
+        checks = iter([True, True])
+        monkeypatch.setattr(lease, "_is_free", lambda c: next(checks, False))
+        monkeypatch.setattr(lease, "PARK_POLL", 0.2)
+        with pytest.raises(lease.Busy):
+            lease.acquire(cfg)
+        monkeypatch.setattr(lease, "_is_free", real_is_free)  # the parked thread checks for real
+        parked = [t for t in threading.enumerate() if t.name == "zen-harness-park"]
         # The other tool's session must still work.
         other.send(json.dumps({"id": 2, "method": "browsingContext.getTree", "params": {}}))
         assert json.loads(other.recv(10))["type"] == "success"
         other.send(json.dumps({"id": 3, "method": "session.end", "params": {}}))
         other.recv(10)
-    if parked:
-        parked.join(10)
-        assert not parked.is_alive()  # released once the other session ended
+    for t in parked:
+        t.join(10)
+        assert not t.is_alive()  # released once the other session ended
     assert page("new_tab(); print(js('1 + 1'))") == "2"
 
 

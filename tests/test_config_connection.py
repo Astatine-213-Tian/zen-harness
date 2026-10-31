@@ -81,3 +81,40 @@ def test_snippets_do_not_load_the_daemon():
     code = ("import sys, zen_harness.run; print(sorted(m for m in ('websockets', 'zen_harness.daemon', "
             "'zen_harness.connection', 'urllib.request') if m in sys.modules))")
     assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True).stdout.strip() == "[]"
+
+
+def test_one_command_for_each_way_of_starting_zen(tmp_path):
+    import shlex
+    for headless in (False, True):
+        cfg = config.Config(headless=headless)
+        flags, flags_env = connection.zen_command(cfg, tmp_path)
+        runtime, runtime_env = connection.zen_command(cfg, tmp_path, debugger_socket=tmp_path / "d.sock")
+        assert "--remote-debugging-port" in flags and "--start-debugger-server" not in flags
+        assert "--start-debugger-server" in runtime and "--remote-debugging-port" not in runtime
+        assert connection.MARIONETTE_PREFS_ENV in flags_env and connection.MARIONETTE_PREFS_ENV not in runtime_env
+        for cmd, env in ((flags, flags_env), (runtime, runtime_env)):
+            assert cmd.count("--headless") == int(headless) and ("MOZ_HEADLESS" in env) == headless
+        # What doctor prints is exactly what a launch runs.
+        words = shlex.split(connection.shell_line(cfg, tmp_path))
+        assert words == [f"{k}={v}" for k, v in flags_env.items()] + flags
+
+
+def test_a_failed_launch_says_why_at_once(tmp_path):
+    import os
+    import subprocess
+    import sys
+    import time
+    from conftest import PORT
+    fake = tmp_path / "zen"
+    fake.write_text("#!/bin/sh\necho 'Zen: something went wrong'\nexit 3\n")
+    fake.chmod(0o755)
+    (tmp_path / "profile").mkdir()
+    env = {**os.environ, "ZH_CONFIG": str(tmp_path / "none.toml"), "ZH_WORKSPACE": str(tmp_path / "ws"),
+           "ZH_PROFILE": str(tmp_path / "profile"), "ZH_PORT": str(int(PORT) + 3), "ZH_ZEN_PATH": str(fake),
+           "ZH_HEADLESS": "1"}
+    start = time.time()
+    p = subprocess.run([sys.executable, "-m", "zen_harness.run"], input="new_tab()", env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert p.returncode == 1
+    assert "Zen exited with code 3" in p.stderr and "something went wrong" in p.stderr
+    assert time.time() - start < 10

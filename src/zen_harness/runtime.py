@@ -143,11 +143,14 @@ def request_debugger(cfg: Config, profile: Path, sock: Path, timeout=15.0):
     wait_for_socket(sock, timeout)
 
 
-def wait_for_socket(sock: Path, timeout):
+def wait_for_socket(sock: Path, timeout, failed=lambda: ""):
+    """Wait for Zen's DevTools socket; `failed()` returns why Zen gave up, to stop waiting early."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if sock.exists():
             return
+        if why := failed():
+            raise BootstrapError(why)
         time.sleep(0.2)
     raise BootstrapError("Zen did not open its DevTools socket; check the three about:config settings, "
                         "and that Zen is not headless (a running headless Zen ignores forwarded flags)")

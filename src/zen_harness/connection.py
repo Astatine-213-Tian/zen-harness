@@ -136,25 +136,47 @@ def _same(a, b) -> bool:
     return a is not None and Path(a).resolve() == Path(b).resolve()
 
 
-def start_command(cfg: Config, profile: Path) -> list:
-    # --marionette lets the daemon own its session through a connection whose loss ends it.
-    cmd = [cfg.zen_path, "--profile", str(profile), "--remote-debugging-port", str(cfg.port), "--marionette"]
-    return cmd + (["--headless"] if cfg.headless else [])
+def zen_command(cfg: Config, profile: Path, debugger_socket: Path = None) -> tuple:
+    """(argv, extra environment) that start Zen on `profile` with remote control on: flags mode,
+    or with `debugger_socket` runtime mode's DevTools socket (ADR-0005). Headless is set here."""
+    if debugger_socket:
+        cmd, env = [cfg.zen_path, "--profile", str(profile), "--start-debugger-server", str(debugger_socket)], {}
+    else:
+        # --marionette lets the daemon own its session through a connection whose loss ends it.
+        cmd = [cfg.zen_path, "--profile", str(profile), "--remote-debugging-port", str(cfg.port), "--marionette"]
+        env = {MARIONETTE_PREFS_ENV: json.dumps({"marionette.port": cfg.marionette_port})}
+    if cfg.headless:
+        # --headless alone still shows a Dock icon for the first moment; the env var never does.
+        cmd, env = cmd + ["--headless"], {**env, "MOZ_HEADLESS": "1"}
+    return cmd, env
 
 
-def headless_env(cfg: Config) -> dict:
-    # --headless alone still shows a Dock icon for the first moment; the env var never does.
-    return {"MOZ_HEADLESS": "1"} if cfg.headless else {}
+def shell_line(cfg: Config, profile: Path) -> str:
+    """The flags-mode start as a line to paste into a shell (what doctor and errors print)."""
+    cmd, env = zen_command(cfg, profile)
+    return " ".join([*(f"{k}={shlex.quote(v)}" for k, v in env.items()), shlex.join(cmd)])
 
 
-def start_env(cfg: Config) -> dict:
-    return {MARIONETTE_PREFS_ENV: json.dumps({"marionette.port": cfg.marionette_port}), **headless_env(cfg)}
+def start_zen(cfg: Config, profile: Path, debugger_socket: Path = None) -> subprocess.Popen:
+    """Start Zen detached, its output appended to the zen log."""
+    cmd, env = zen_command(cfg, profile, debugger_socket)
+    log = runfiles.log(cfg, "zen")
+    proc = subprocess.Popen(cmd, env={**os.environ, **env}, stdin=subprocess.DEVNULL, stdout=log.open("ab"),
+                            stderr=subprocess.STDOUT, start_new_session=True)
+    proc.log, proc.log_start = log, log.stat().st_size
+    return proc
 
 
-def start_shell(cfg: Config, profile: Path) -> str:
-    """start_command as a line to paste into a shell."""
-    env = " ".join(f"{k}={shlex.quote(v)}" for k, v in start_env(cfg).items())
-    return f"{env} {shlex.join(start_command(cfg, profile))}"
+def failed_start(proc) -> str:
+    """If Zen exited with an error, why (the end of what it logged); else ''. Exit 0 can mean it
+    handed over to a copy already running, so only an error counts."""
+    code = proc.poll()
+    if not code:
+        return ""
+    with proc.log.open("rb") as f:
+        f.seek(proc.log_start)
+        tail = f.read().decode(errors="replace").strip().splitlines()[-5:]
+    return f"Zen exited with code {code}" + (":\n  " + "\n  ".join(tail) if tail else f"; see {proc.log}")
 
 
 def ensure_automation_prefs(cfg: Config, profile: Path):
@@ -171,11 +193,11 @@ def ensure_automation_prefs(cfg: Config, profile: Path):
 
 def launch(cfg: Config, profile: Path, timeout=30.0) -> str:
     ensure_automation_prefs(cfg, profile)
-    log = runfiles.log(cfg, "zen")
-    subprocess.Popen(start_command(cfg, profile), env={**os.environ, **start_env(cfg)}, stdin=subprocess.DEVNULL,
-                     stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
+    proc = start_zen(cfg, profile)
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if why := failed_start(proc):
+            raise ConnectError(why)
         if listener(cfg.port) == "bidi":
             # Marionette starts alongside BiDi; give it a moment so the daemon can use it.
             until = min(deadline, time.time() + 5)
@@ -183,7 +205,7 @@ def launch(cfg: Config, profile: Path, timeout=30.0) -> str:
                 time.sleep(0.25)
             return session_url(cfg)
         time.sleep(0.25)
-    raise ConnectError(f"started Zen but it did not open port {cfg.port} within {timeout:.0f}s; see {log}")
+    raise ConnectError(f"started Zen but it did not open port {cfg.port} within {timeout:.0f}s; see {proc.log}")
 
 
 def quit_zen(cfg: Config, pid: int, timeout=20.0):
@@ -228,14 +250,9 @@ def start_runtime(cfg: Config, profile: Path, running: bool, timeout=10.0) -> st
         if running:
             runtime.request_debugger(cfg, profile, sock)
         else:
-            runfiles.private_dir(sock.parent)
             sock.unlink(missing_ok=True)
-            log = runfiles.log(cfg, "zen")
-            cmd = [cfg.zen_path, "--profile", str(profile), *runtime.debugger_args(sock)]
-            subprocess.Popen(cmd + (["--headless"] if cfg.headless else []), stdin=subprocess.DEVNULL,
-                             env={**os.environ, **headless_env(cfg)},
-                             stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
-            runtime.wait_for_socket(sock, 30.0)
+            proc = start_zen(cfg, profile, debugger_socket=sock)
+            runtime.wait_for_socket(sock, 30.0, failed=lambda: failed_start(proc))
         runtime.start(sock)
     except (runtime.BootstrapError, OSError, subprocess.SubprocessError) as e:
         raise ConnectError(f"could not turn on remote control inside Zen: {e}") from e
@@ -268,8 +285,8 @@ def connect(cfg: Config) -> str:
             "    tabs come back through session restore)\n"
             "  - set if_not_listening = \"relaunch\" in ~/.config/zen-harness/config.toml\n"
             "  - quit Zen and start it yourself with:\n"
-            f"    {start_shell(cfg, profile)}")
+            f"    {shell_line(cfg, profile)}")
     if cfg.if_not_running == "launch":
         return launch(cfg, profile)
     raise ConnectError("Zen is not running with remote control. Start it with:\n"
-                       f"  {start_shell(cfg, profile)}")
+                       f"  {shell_line(cfg, profile)}")

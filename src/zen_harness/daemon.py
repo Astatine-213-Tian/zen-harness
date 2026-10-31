@@ -24,10 +24,9 @@ from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from . import config, connection, controlled, marionette, runfiles, settle
+from . import config, connection, controlled, lease, runfiles, settle
 from . import ipc
 
-CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
 EVENTS = [
     "browsingContext.contextCreated", "browsingContext.contextDestroyed",
     "browsingContext.load", "browsingContext.userPromptOpened", "browsingContext.userPromptClosed",
@@ -44,136 +43,29 @@ BLOCKED_BY_DIALOG = ("input.performActions", "script.evaluate", "script.callFunc
 
 
 def open_session(cfg):
+    taken = lease.acquire(cfg)
     try:
-        url = connection.connect(cfg)
-        # A session that was just stopped is released a moment later; don't race it.
-        deadline = time.time() + 5
-        while not session_free(cfg) and time.time() < deadline:
-            time.sleep(0.2)
-        client = marionette_session(cfg)
-        if client:
-            return Session(client.ws_url, marionette=client, tab_marker=cfg.tab_marker)
-        return Session(url, tab_marker=cfg.tab_marker)
+        return Session(taken, tab_marker=cfg.tab_marker)
     except BiDiError as e:
-        if "Maximum number of active sessions" not in str(e):
-            raise
-        # Firefox never ends a BiDi-only session whose socket dropped, and it can't be rejoined.
-        raise BiDiError(
-            "Zen already has a remote-control session open: another tool (e.g. an MCP server) holds it,\n"
-            "or a zen-harness daemon was force-killed. Stop the other tool, or (after checking with the\n"
-            "user, since it ends whoever's session is open) run `zen-harness stop --force`, or\n"
-            "`zen-harness relaunch` to restart Zen (tabs come back through session restore).") from e
+        if e.code == "session not created":  # BiDi-only, and another client holds the session
+            raise lease.Busy() from e
+        raise
 
 
 class BiDiError(ipc.BrowserError):
     """A BiDi command or session step failed; reaches snippets as BrowserError."""
 
 
-class SessionTaken(BiDiError):
-    """Another tool took Zen's session while we connected to Marionette. `client` must stay
-    open until that session ends: closing any Marionette connection ends the open session."""
-
-    def __init__(self, message, client):
-        super().__init__(message)
-        self.client = client
-
-
-def force_end_session(cfg, timeout=5.0) -> str:
-    """End whatever remote-control session Zen has open, whoever holds it (`stop --force`).
-
-    Closing a Marionette connection makes Firefox end the open session, so connect and
-    close. Never call this automatically: it also ends another tool's live session."""
-    if connection.listener(cfg.port) != "bidi":
-        return f"Zen isn't accepting remote control on port {cfg.port}; nothing to clear"
-    released = time.time() + 1  # a session that was just stopped is released a moment later
-    while not session_free(cfg):
-        if time.time() > released:
-            break
-        time.sleep(0.1)
-    else:
-        return "Zen has no open session; nothing to clear"
-    port = connection.marionette_port(cfg)
-    if not port:
-        raise BiDiError("Zen runs without Marionette, so its open session can only be cleared by "
-                        "restarting Zen: run `zen-harness relaunch`")
-    try:
-        client = marionette.Client(port)
-    except (OSError, EOFError, ValueError, marionette.MarionetteError) as e:
-        raise BiDiError("another tool is connected to Zen through Marionette and holds the session; "
-                        "stop that tool (or run `zen-harness relaunch`)") from e
-    client.close()
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if session_free(cfg):
-            return "ended Zen's open session"
-        time.sleep(0.2)
-    raise BiDiError(f"Zen still reports an open session {timeout:g}s later; run `zen-harness relaunch`")
-
-
-def park(cfg, client, poll=1.0):
-    """Hold `client` open until Zen's other session ends (or Zen goes away), then close it."""
-    while True:
-        time.sleep(poll)
-        try:
-            if session_free(cfg):
-                break
-        except Exception:
-            break
-    client.close()
-
-
-def session_free(cfg):
-    """True if Zen has no WebDriver session open (BiDi session.status)."""
-    with ws_connect(connection.session_url(cfg), open_timeout=10) as ws:
-        ws.send(json.dumps({"id": 1, "method": "session.status", "params": {}}))
-        return bool(json.loads(ws.recv(10)).get("result", {}).get("ready"))
-
-
-def marionette_session(cfg, timeout=60.0):
-    """A Marionette client holding a new session with BiDi on, or None to fall back to BiDi-only.
-
-    Marionette deletes its session when this connection drops, even on kill -9.
-    """
-    port = connection.marionette_port(cfg)
-    if not port:
-        return None
-    # Closing any Marionette connection deletes the open session, even another tool's,
-    # so only connect when there is none.
-    if not session_free(cfg):
-        raise BiDiError("session not created: Maximum number of active sessions")
-    try:
-        client = marionette.Client(port)
-    except (OSError, EOFError, ValueError, marionette.MarionetteError):
-        return None
-    try:
-        result = client.command("WebDriver:NewSession", {"webSocketUrl": True, **CAPABILITIES}, timeout=timeout)
-        client.ws_url = result.get("capabilities", {}).get("webSocketUrl")
-        client.session_id = result.get("sessionId")
-        if not client.ws_url:
-            raise marionette.MarionetteError("Zen made a Marionette session without WebDriver BiDi")
-    except Exception as e:
-        try:
-            taken = not session_free(cfg)
-        except Exception:
-            taken = False
-        if taken:  # someone took it after our check; closing now would end their session
-            raise SessionTaken("session not created: Maximum number of active sessions", client) from e
-        client.close()
-        raise BiDiError(str(e)) from e
-    return client
-
-
 class Session:
-    def __init__(self, url, session_timeout=60.0, marionette=None, tab_marker=""):
-        """Attach to the BiDi session at `url`; without a `marionette` client holding one, create it."""
-        self.marionette = marionette
-        self.mode = "marionette" if marionette else "bidi"
+    def __init__(self, taken, session_timeout=60.0, tab_marker=""):
+        """Attach to the leased session; a BiDi-only lease asks for the session on our socket."""
+        self.lease = taken
+        self.mode = taken.kind
         try:
             # Entered by hand: calling connect() directly is deprecated, and we close it ourselves.
-            self.ws = ws_connect(url, max_size=None, open_timeout=10, ping_interval=None).__enter__()
+            self.ws = ws_connect(taken.ws_url, max_size=None, open_timeout=10, ping_interval=None).__enter__()
         except Exception:
-            if marionette:
-                marionette.close()
+            taken.release()
             raise
         self.ids = itertools.count(1)
         self.pending = {}
@@ -188,16 +80,15 @@ class Session:
         self.closed = threading.Event()
         threading.Thread(target=self._read, daemon=True).start()
         try:
-            if marionette:
-                self.id = marionette.session_id
+            if taken.client:
+                self.id = taken.session_id
             else:
-                self.id = self.call("session.new", {"capabilities": {"alwaysMatch": CAPABILITIES}},
+                self.id = self.call("session.new", {"capabilities": {"alwaysMatch": lease.CAPABILITIES}},
                                     timeout=session_timeout)["sessionId"]
             self.call("session.subscribe", {"events": EVENTS})
         except Exception:
+            taken.release()
             self.ws.close()
-            if marionette:
-                marionette.close()
             raise
 
     def call(self, method, params=None, timeout=30.0, navigates=False):
@@ -343,17 +234,8 @@ class Session:
             return
         self.closing = True
         self.tabs.release()  # don't leave markers on the user's tabs
+        self.lease.release(lambda: self.call("session.end", timeout=3))
         try:
-            if self.marionette:
-                # BiDi's session.end refuses sessions made through WebDriver classic.
-                self.marionette.command("WebDriver:DeleteSession", timeout=3)
-            else:
-                self.call("session.end", timeout=3)
-        except Exception:
-            pass
-        try:
-            if self.marionette:
-                self.marionette.close()
             self.ws.close()
         except Exception:
             pass
@@ -467,7 +349,7 @@ def report(outcome):
 
 def main():
     cfg = config.load()
-    session = None
+    lock = session = None
     try:
         lock = take_port_lock(cfg)
         if lock is None:
@@ -476,14 +358,12 @@ def main():
         session = open_session(cfg)
         server = bind(cfg)
     except Exception as e:
-        msg = str(e) if isinstance(e, (connection.ConnectError, BiDiError)) else traceback.format_exc()
+        msg = str(e) if isinstance(e, (connection.ConnectError, ipc.HarnessError)) else traceback.format_exc()
         if session:
             session.close()
+        if lock:
+            lock.close()  # free the port now: a lease may keep this process alive (lease._park)
         report({"error": msg})
-        taken = e if isinstance(e, SessionTaken) else e.__cause__ if isinstance(e.__cause__, SessionTaken) else None
-        if taken:
-            lock.close()  # free the port for the next start, but keep the other tool's session alive
-            park(cfg, taken.client)
         sys.exit(1)
     report({"ok": True})
     serve(cfg, session, server)

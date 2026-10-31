@@ -9,8 +9,7 @@ Every helper that takes a selector (`click`, `fill_input`, `wait_for_element`, `
 ```python
 click("#star")              # a button inside <star-card>'s shadow root
 fill_input("#q", "zen")     # an input inside it
-upload_file("x-uploader input[type=file]", "/abs/path/report.csv")  # no: a selector can't cross into a root
-upload_file("input[type=file]:not(#files)", "/abs/path/report.csv")  # yes: matches the input inside the root
+upload_file("input[type=file]:not(#files)", "/abs/path/report.csv")  # the input inside <x-uploader>
 ```
 
 A selector matches within one tree, so it can't span a shadow boundary: `star-card #star` finds nothing. Use the inner part alone, or a ref from `snapshot()`. When the same selector matches outside and inside a root, the match outside wins.

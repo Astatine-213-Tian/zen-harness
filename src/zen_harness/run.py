@@ -123,7 +123,7 @@ def doctor(cfg):
         print("runtime mode: " + ("ready; the next call turns remote control on inside Zen, no restart"
                                   if not missing else runtime.prefs_help(missing)))
     elif profile and not kind:
-        print(f"start command: {connection.start_shell(cfg, profile)}")
+        print(f"start command: {connection.shell_line(cfg, profile)}")
     return 0
 
 
@@ -167,10 +167,10 @@ def main():
             return 0
         print("zen-harness: --force ends whatever remote-control session Zen has open, "
               "even another tool's.", file=sys.stderr)
-        from . import daemon
+        from . import lease
         try:
-            print(daemon.force_end_session(cfg))
-        except daemon.BiDiError as e:
+            print(lease.force_release(cfg))
+        except lease.LeaseError as e:
             print(f"zen-harness: {e}", file=sys.stderr)
             return 1
         return 0

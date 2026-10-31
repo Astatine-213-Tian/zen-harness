@@ -99,9 +99,10 @@ def test_parse_lsof_ports():
 def test_start_command_turns_on_marionette_on_the_configured_port(tmp_path):
     cfg = config.load(env={"ZH_MARIONETTE_PORT": "2861", "ZH_PORT": "9361"}, config_file=tmp_path / "none")
     assert cfg.marionette_port == 2861
-    assert "--marionette" in connection.start_command(cfg, tmp_path)
-    assert json.loads(connection.start_env(cfg)[connection.MARIONETTE_PREFS_ENV]) == {"marionette.port": 2861}
-    line = connection.start_shell(cfg, tmp_path)
+    cmd, env = connection.zen_command(cfg, tmp_path)
+    assert "--marionette" in cmd
+    assert json.loads(env[connection.MARIONETTE_PREFS_ENV]) == {"marionette.port": 2861}
+    line = connection.shell_line(cfg, tmp_path)
     assert line.startswith(connection.MARIONETTE_PREFS_ENV + "='{\"marionette.port\": 2861}' ")
     assert "--remote-debugging-port 9361 --marionette" in line
     assert config.Config().marionette_port == 0

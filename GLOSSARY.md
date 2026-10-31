@@ -10,6 +10,8 @@ Domain terms for zen-harness. Use them as written in code, docs, issues and test
 
 **Snapshot ref**: a name like `@e3` (or `@f1e3` inside frame 1) that `snapshot()` gives a control, usable as a selector by every helper. Valid until the next `snapshot()` or until its document is replaced; then it raises `NotFound`.
 
+**Session lease**: the daemon's hold on Zen's one WebDriver session (ADR-0003), taken through Marionette when Zen has it on so that losing the daemon ends the session. `lease.py`.
+
 **Navigation cause**: a call from an action helper (`click`, `type_text`, `press_key`, `js`, `goto_url`, `handle_dialog`, raw `bidi`, ...) that might start a navigation in the tab it targets, or in the tab that contains its frame. Reads by the harness itself are never navigation causes.
 
 **Grace period**: how long a navigation cause gets to show up as a navigation (300 ms) before its tab counts as settled without one.
