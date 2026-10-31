@@ -26,15 +26,17 @@ Reloading keeps form state (a ticked checkbox stays ticked); use `goto_url(...)`
 
 ## Dialogs during navigation
 
-If a page shows `alert()` while loading, or a `beforeunload` "Leave page?" prompt when you navigate away, the navigation returns with the dialog open. Check for it, answer it, then wait:
+If a page shows `alert()` while loading, the navigation returns with the dialog open, and `wait_for_load()` raises `DialogOpen` until it is answered:
 
 ```python
 goto_url("https://example.com/")
 info = page_info()
 if "dialog" in info:
-    print(info["dialog"])           # {'type': 'beforeunload', 'message': ...}
-    handle_dialog(accept=True)      # accept=False stays on the page
+    print(info["dialog"])           # {'type': 'alert', 'message': ...}
+    handle_dialog()
 wait_for_load()
 ```
+
+Leaving a page with unsaved changes never opens the "Leave page?" prompt from `goto_url`: it waits for the page to save, then raises `UnsavedChanges` (pass `leave=True` to discard).
 
 More in `zen-harness notes dialogs`.

@@ -453,21 +453,6 @@ print(sorted((c["name"], c["httpOnly"], c["value"]["value"]) for c in r["cookies
 
 # --- regressions for helper fixes ---
 
-def test_goto_url_returns_when_beforeunload_asks(at, site):
-    zh = at("dialogs.html")
-    out = zh(f"""
-click('#dirty'); type_text('x')
-goto_url({site + '/forms.html'!r})
-print(page_info().get('dialog', {{}}).get('type'))
-handle_dialog(accept=True)
-for _ in range(50):
-    if page_info().get('url', '').endswith('/forms.html'): break
-    wait(0.1)
-print(page_info()['url'].endswith('/forms.html'))
-""")
-    assert out.splitlines() == ["beforeunload", "True"]
-
-
 def test_input_while_dialog_open_fails_fast(at):
     zh = at("dialogs.html")
     zh("click('#delete')")

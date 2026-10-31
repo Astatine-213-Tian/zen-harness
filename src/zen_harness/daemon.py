@@ -356,7 +356,8 @@ class Session:
             self.current = req["context"]
             return {"context": self.current}
         if op == "load_state":
-            return self.load_state(req.get("context") or self.current)
+            ctx = req.get("context") or self.current
+            return {**self.load_state(ctx), "dialog": self.dialogs.get(ctx)}
         if op == "dialog":
             return {"dialog": self.dialogs.get(req.get("context") or self.current)}
         if op == "network":

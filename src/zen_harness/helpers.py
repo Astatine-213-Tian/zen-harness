@@ -88,10 +88,11 @@ def _value(rv):
     return {"type": t}
 
 
-def _evaluate(expression, ctx, passive=False):
-    """passive=True: a read that can't navigate, so wait_for_load needn't watch for one."""
+def _evaluate(expression, ctx, passive=False, activate=True):
+    """passive=True: a read that can't navigate, so wait_for_load needn't watch for one.
+    activate=False: run without giving the page a user activation."""
     r = bidi("script.evaluate", expression=expression, target={"context": ctx}, awaitPromise=True,
-             resultOwnership="none", userActivation=True, zh_passive=passive,
+             resultOwnership="none", userActivation=activate, zh_passive=passive,
              serializationOptions={"maxObjectDepth": 20, "maxDomDepth": 0})
     if r.get("type") == "exception":
         d = r.get("exceptionDetails", {})
@@ -274,8 +275,60 @@ def snapshot(query=None, within=None, limit=150, hrefs=False):
 
 # --- navigation and page ---
 
-def goto_url(url):
+class UnsavedChanges(Exception):
+    """The page would ask "leave page?" (a beforeunload handler) if navigated away from."""
+
+
+# Zen always brings a tab to the front to show its "leave page?" prompt, so navigations the
+# harness starts ask the page first, with a synthetic beforeunload event (no prompt), and then
+# keep the real one from prompting.
+_WANTS_TO_STAY_JS = """(()=>{
+const e = document.createEvent('BeforeUnloadEvent');
+e.initEvent('beforeunload', false, true);
+dispatchEvent(e);
+return e.defaultPrevented || !!e.returnValue;
+})()"""
+# Capture listeners on the window run before the page's own (non-capture) ones; only for a few
+# seconds, in case the navigation doesn't unload the page (a single-page app's link).
+_SKIP_PROMPT_JS = """{
+window.__zhLeaveUntil = Date.now() + 5000;
+if (!window.__zhLeave) {
+  window.__zhLeave = e => { if (e.isTrusted && Date.now() < window.__zhLeaveUntil) e.stopImmediatePropagation(); };
+  addEventListener('beforeunload', window.__zhLeave, true);
+}
+}"""
+
+
+def _leave_page(ctx, leave=False, save_wait=10.0):
+    """Get the page in `ctx` ready to be navigated away from without a "leave page?" prompt.
+
+    A page that says it has unsaved changes gets `save_wait` seconds to save them (apps like
+    Notion stop asking once saved); then UnsavedChanges, unless leave=True."""
+    deadline = time.time() + save_wait
+    while not leave:
+        try:
+            if not _evaluate(_WANTS_TO_STAY_JS, ctx, passive=True, activate=False):
+                break
+        except RuntimeError:
+            break  # no document to ask, e.g. an error page
+        if time.time() > deadline:
+            raise UnsavedChanges(
+                "the page says it has unsaved changes (leaving would show a \"leave page?\" prompt, which "
+                "brings the tab to the user's front); wait for it to save and retry, or pass leave=True "
+                "to leave anyway and lose them")
+        time.sleep(0.5)
+    try:
+        _evaluate(_SKIP_PROMPT_JS, ctx, passive=True, activate=False)
+    except RuntimeError:
+        pass
+
+
+def goto_url(url, leave=False, save_wait=10.0):
+    """Navigate the controlled tab. If the page has unsaved changes (it would ask "leave
+    page?"), waits up to `save_wait` s for them to save, then raises UnsavedChanges unless
+    leave=True. The prompt itself never opens, so the user's view never jumps to this tab."""
     ctx = _ctx()
+    _leave_page(ctx, leave, save_wait)
     r = bidi("browsingContext.navigate", context=ctx, url=url, wait="interactive", _timeout=60)
     _mark(ctx)
     out = {"url": r.get("url", url)}
@@ -344,12 +397,14 @@ def click_at_xy(x, y, button="left", clicks=1):
     _click(_ctx(), x, y, button, clicks)
 
 
-def click(selector, timeout=0.0):
+def click(selector, timeout=0.0, leave=False, save_wait=10.0):
     """Scroll the first element matching `selector` into view and click its centre.
 
     A link that would open a new tab or window (target=_blank etc.) is Cmd/Ctrl-clicked,
     so the new tab opens in the background instead of switching the user's view; the
-    harness keeps controlling the current tab (find the new one with list_tabs())."""
+    harness keeps controlling the current tab (find the new one with list_tabs()).
+    A link to another page is handled like goto_url: unsaved changes get `save_wait` s to
+    save, then UnsavedChanges unless leave=True."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
         raise RuntimeError(f"click: element not found: {selector!r}")
     ctx, el = _locate(selector)
@@ -357,11 +412,15 @@ def click(selector, timeout=0.0):
              "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
              "const a=e.closest('a[href],area[href]'),t=(a&&a.target||'').toLowerCase();"
              "return {x:r.left+r.width/2,y:r.top+r.height/2,w:r.width,h:r.height,"
-             "newTab:!!t&&!['_self','_parent','_top'].includes(t)};})()", target_id=ctx)
+             "newTab:!!t&&!['_self','_parent','_top'].includes(t),"
+             "leaves:!!a&&!(t&&!['_self','_parent','_top'].includes(t))&&!a.hasAttribute('download')&&!/^(javascript|mailto|tel|sms):/i.test(a.href)"
+             "&&a.href.split('#')[0]!==location.href.split('#')[0]};})()", target_id=ctx)
     if not box:
         raise RuntimeError(f"click: element not found: {selector!r}")
     if not box["w"] and not box["h"]:
         raise RuntimeError(f"click: element is not displayed: {selector!r}")
+    if box["leaves"]:
+        _leave_page(ctx, leave, save_wait)
     _click(ctx, box["x"], box["y"], background=box["newTab"])
 
 
@@ -725,12 +784,20 @@ def wait(seconds=1.0):
 _NAVIGATION_GRACE_MS = 300
 
 
+class DialogOpen(Exception):
+    """A dialog blocks the tab, so waiting for a page or element would only time out."""
+
+
 def _settled(ctx, need_load):
     """False while the controlled tab is (maybe about to be) navigating away.
 
     need_load=True waits for the new page's load event; False only for its document
-    to be in place (enough to look for elements)."""
+    to be in place (enough to look for elements). Raises DialogOpen while a dialog is open."""
     s = _send({"meta": "load_state", "context": ctx})
+    if d := s.get("dialog"):
+        hint = (" (accept=True leaves the page, accept=False stays)" if d["type"] == "beforeunload" else "")
+        raise DialogOpen(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
+                         f"answer it with handle_dialog(){hint} first")
     if s["navigating"] and (need_load or not s["committed"]):
         return False
     quiet = s["since_cause_ms"] is None or s["since_cause_ms"] >= _NAVIGATION_GRACE_MS
@@ -739,7 +806,8 @@ def _settled(ctx, need_load):
 
 def wait_for_load(timeout=15.0):
     """Wait until the controlled tab has finished loading. After a click or js() that
-    navigates, this waits for the new page rather than returning on the old one."""
+    navigates, this waits for the new page rather than returning on the old one.
+    Raises DialogOpen at once if a dialog (e.g. "leave page?") blocks the tab."""
     ctx = _ctx()
     deadline = time.time() + timeout
     while time.time() < deadline:

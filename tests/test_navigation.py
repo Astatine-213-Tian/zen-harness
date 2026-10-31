@@ -1,4 +1,5 @@
-"""wait_for_load / wait_for_element after actions that navigate (#1), and js() scoping (#2)."""
+"""wait_for_load / wait_for_element after actions that navigate (#1), js() scoping (#2), and
+leaving pages with unsaved changes without a prompt that would show the tab (#10, #11)."""
 import time
 
 
@@ -39,6 +40,71 @@ handle_dialog(accept=False)
 print(wait_for_load(timeout=5), page_info()['url'].endswith('/dialogs.html'))
 """)
     assert out.splitlines() == ["beforeunload", "True True"]
+
+
+def test_goto_url_with_unsaved_changes_raises_instead_of_prompting(at, site):
+    zh = at("dialogs.html")
+    out = zh(f"""
+fill_input('#dirty', 'draft')
+try:
+    goto_url({site + '/forms.html'!r}, save_wait=1)
+except UnsavedChanges as e:
+    print('raised')
+print(page_info().get('dialog'), page_info()['url'].endswith('/dialogs.html'), js('document.visibilityState'))
+""")
+    assert out.splitlines() == ["raised", "None True hidden"]
+
+
+def test_goto_url_leave_discards_without_prompting(at, site):
+    zh = at("dialogs.html")
+    out = zh(f"""
+fill_input('#dirty', 'draft')
+goto_url({site + '/forms.html'!r}, leave=True); wait_for_load()
+print(page_info()['url'].endswith('/forms.html'), js('document.visibilityState'))
+""")
+    assert out == "True hidden"
+
+
+def test_goto_url_waits_for_the_page_to_save(at, site):
+    zh = at("dialogs.html")
+    out = zh(f"""
+import time
+fill_input('#dirty', 'draft'); click('#save')
+t = time.time(); goto_url({site + '/forms.html'!r}); wait_for_load()
+print(page_info()['url'].endswith('/forms.html'), time.time() - t > 0.8, js('document.visibilityState'))
+""")
+    assert out == "True True hidden"
+
+
+def test_click_on_a_link_with_unsaved_changes(at, site):
+    zh = at("dialogs.html")
+    out = zh("""
+fill_input('#dirty', 'draft')
+try:
+    click('#away', save_wait=1)
+except UnsavedChanges:
+    print('raised')
+click('#away', leave=True); wait_for_load()
+print(page_info()['url'].endswith('/forms.html'), js('document.visibilityState'))
+""")
+    assert out.splitlines() == ["raised", "True hidden"]
+
+
+def test_wait_for_load_fails_fast_while_a_dialog_is_open(at, site):
+    # The page's own navigation (not one the harness starts) still prompts.
+    zh = at("dialogs.html")
+    out = zh(f"""
+import time
+fill_input('#dirty', 'draft')
+js("location.href = {site + '/forms.html'!r}"); wait(0.5)
+t = time.time()
+try:
+    wait_for_load()
+except DialogOpen as e:
+    print('beforeunload' in str(e), time.time() - t < 2)
+handle_dialog(accept=False)
+""")
+    assert out == "True True"
 
 
 def test_js_declarations_stay_local_to_each_call(page):

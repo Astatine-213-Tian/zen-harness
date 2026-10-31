@@ -6,6 +6,8 @@
   <button id="delete" onclick="window.__deleted = confirm('Delete 3 files?')">Delete</button>
   <button id="prompt" onclick="window.__name = prompt('Your name?', 'guest')">Prompt</button>
   <label><input id="dirty"> (typing here arms beforeunload)</label>
+  <button id="save" onclick="setTimeout(() => { window.onbeforeunload = null; }, 1000)">Save</button>
+  <a id="away" href="forms.html">Forms</a>
   <script>
     document.getElementById('dirty').addEventListener('input', () => {
       window.onbeforeunload = e => { e.preventDefault(); e.returnValue = ''; };

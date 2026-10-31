@@ -19,14 +19,21 @@ if "dialog" in info:
 
 ## beforeunload ("Leave page? Changes may not be saved")
 
-Pages with unsaved input arm it. `goto_url` returns as soon as the prompt appears; answer it, then wait for the new page:
+Pages with unsaved input arm it. Zen always selects a tab to show this prompt, which would pull the user's view to your background tab, so the harness never lets it open for navigations it starts:
+
+- `goto_url(url)` and `click()` on a link first ask the page (a synthetic `beforeunload` event, no prompt). If it says it has unsaved changes, they wait up to `save_wait` seconds (default 10) for it to save. Apps like Notion stop asking once their save lands. Then they raise `UnsavedChanges`.
+- `leave=True` leaves anyway and discards the changes. Either way the real prompt is switched off for that navigation.
 
 ```python
-goto_url("https://example.com/")
-if page_info().get("dialog", {}).get("type") == "beforeunload":
-    handle_dialog(accept=True)   # leave; accept=False stays and keeps the draft
-wait_for_load()                  # the next page (or, if you stayed, the current one)
+try:
+    goto_url("https://example.com/")
+except UnsavedChanges:
+    wait(5)                                    # let the app finish saving, then retry
+    goto_url("https://example.com/", leave=True)   # or discard: only if it's your own throwaway input
+wait_for_load()
 ```
+
+Navigations the page starts itself (`js("location.href = ...")`, a form submit, a script redirect) can still open the prompt and bring the tab forward; `wait_for_load()` then raises `DialogOpen`, and you answer with `handle_dialog(accept=True)` (leave) or `accept=False` (stay). Prefer `goto_url` for navigating.
 
 `close_tab()` closes without asking. If the input is the user's own unsaved work, ask before discarding it.
 
