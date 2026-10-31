@@ -48,7 +48,8 @@ def test_runtime_start_has_no_automation_flag(tmp_path, env):
     sock.parent.mkdir(mode=0o700, exist_ok=True)
     sock.unlink(missing_ok=True)
     zen = subprocess.Popen([env.get("ZH_ZEN_PATH", config.Config().zen_path), "--profile", str(profile), "--headless",
-                            *runtime.debugger_args(sock)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            *runtime.debugger_args(sock)], env={**os.environ, "MOZ_HEADLESS": "1"},
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     e = {**env, "ZH_PORT": port, "ZH_PROFILE": str(profile), "ZH_WORKSPACE": str(tmp_path / "ws")}
     try:
         runtime.wait_for_socket(sock, 30)

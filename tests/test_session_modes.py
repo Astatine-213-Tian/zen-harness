@@ -41,7 +41,7 @@ def bidi_only_env(env):
     profile = tmp / "profile"
     profile.mkdir()
     (profile / "user.js").write_text('user_pref("remote.prefs.recommended", false);\n')
-    zen_env = {k: v for k, v in os.environ.items() if not k.startswith("MOZ_")}
+    zen_env = {**{k: v for k, v in os.environ.items() if not k.startswith("MOZ_")}, "MOZ_HEADLESS": "1"}
     subprocess.Popen([env.get("ZH_ZEN_PATH", "/Applications/Zen.app/Contents/MacOS/zen"), "--profile",
                       str(profile), "--remote-debugging-port", port, "--headless"], env=zen_env,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

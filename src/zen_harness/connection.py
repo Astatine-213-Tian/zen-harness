@@ -141,8 +141,13 @@ def start_command(cfg: Config, profile: Path) -> list:
     return cmd + (["--headless"] if cfg.headless else [])
 
 
+def headless_env(cfg: Config) -> dict:
+    # --headless alone still shows a Dock icon for the first moment; the env var never does.
+    return {"MOZ_HEADLESS": "1"} if cfg.headless else {}
+
+
 def start_env(cfg: Config) -> dict:
-    return {MARIONETTE_PREFS_ENV: json.dumps({"marionette.port": cfg.marionette_port})}
+    return {MARIONETTE_PREFS_ENV: json.dumps({"marionette.port": cfg.marionette_port}), **headless_env(cfg)}
 
 
 def start_shell(cfg: Config, profile: Path) -> str:
@@ -243,6 +248,7 @@ def start_runtime(cfg: Config, profile: Path, running: bool, timeout=10.0) -> st
             log.parent.mkdir(parents=True, exist_ok=True)
             cmd = [cfg.zen_path, "--profile", str(profile), *runtime.debugger_args(sock)]
             subprocess.Popen(cmd + (["--headless"] if cfg.headless else []), stdin=subprocess.DEVNULL,
+                             env={**os.environ, **headless_env(cfg)},
                              stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
             runtime.wait_for_socket(sock, 30.0)
         runtime.start(sock)
