@@ -14,6 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import runfiles
 from .config import Config
 
 # Firefox hard-codes the runtime Remote Agent to 9222 and quits the browser if it's busy.
@@ -53,7 +54,7 @@ class BootstrapError(RuntimeError):
 
 
 def devtools_socket() -> Path:
-    return Path(f"/tmp/zen-harness-{os.getuid()}") / "devtools.sock"
+    return runfiles.devtools_socket()
 
 
 def missing_prefs(profile: Path):
@@ -135,8 +136,7 @@ def debugger_args(sock: Path) -> list:
 
 def request_debugger(cfg: Config, profile: Path, sock: Path, timeout=15.0):
     """Ask the running Zen for a DevTools server on `sock` (the flag is forwarded to it)."""
-    sock.parent.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(sock.parent, 0o700)
+    runfiles.private_dir(sock.parent)
     sock.unlink(missing_ok=True)
     subprocess.run([cfg.zen_path, "--profile", str(profile), *debugger_args(sock)],
                    capture_output=True, timeout=timeout)

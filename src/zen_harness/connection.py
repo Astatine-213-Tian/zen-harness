@@ -13,6 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import runfiles
 from .config import Config
 
 BUNDLE_ID = "app.zen-browser.zen"
@@ -170,8 +171,7 @@ def ensure_automation_prefs(cfg: Config, profile: Path):
 
 def launch(cfg: Config, profile: Path, timeout=30.0) -> str:
     ensure_automation_prefs(cfg, profile)
-    log = cfg.run_dir / "zen.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
+    log = runfiles.log(cfg, "zen")
     subprocess.Popen(start_command(cfg, profile), env={**os.environ, **start_env(cfg)}, stdin=subprocess.DEVNULL,
                      stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
     deadline = time.time() + timeout
@@ -228,10 +228,9 @@ def start_runtime(cfg: Config, profile: Path, running: bool, timeout=10.0) -> st
         if running:
             runtime.request_debugger(cfg, profile, sock)
         else:
-            sock.parent.mkdir(mode=0o700, exist_ok=True)
+            runfiles.private_dir(sock.parent)
             sock.unlink(missing_ok=True)
-            log = cfg.run_dir / "zen.log"
-            log.parent.mkdir(parents=True, exist_ok=True)
+            log = runfiles.log(cfg, "zen")
             cmd = [cfg.zen_path, "--profile", str(profile), *runtime.debugger_args(sock)]
             subprocess.Popen(cmd + (["--headless"] if cfg.headless else []), stdin=subprocess.DEVNULL,
                              env={**os.environ, **headless_env(cfg)},

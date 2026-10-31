@@ -2,9 +2,9 @@
 import importlib.util
 import sys
 import traceback
-from importlib import resources
 
-from . import __version__, config, connection, daemon, helpers, ipc
+# Only what every snippet needs: the daemon, websockets and launch code load on demand.
+from . import __version__, config, helpers, ipc
 
 HELP = f"""zen-harness {__version__}: let an agent drive your real Zen browser.
 
@@ -68,6 +68,7 @@ SESSION_MODES = {
 
 def notes(topic=None):
     """List the interaction notes with their one-line summaries, or print one."""
+    from importlib import resources
     folder = resources.files("zen_harness").joinpath("interaction-skills")
     found = {p.name[:-3]: p for p in folder.iterdir() if p.name.endswith(".md")}
     if topic is None:
@@ -88,6 +89,7 @@ def notes(topic=None):
 
 
 def doctor(cfg):
+    from . import connection
     print(f"zen-harness {__version__}")
     print(f"config file: {config.CONFIG_FILE} ({'found' if config.CONFIG_FILE.is_file() else 'not found, using defaults'})")
     for k, v in vars(cfg).items():
@@ -143,6 +145,7 @@ def main():
     if cmd in ("doctor", "--doctor"):
         return doctor(cfg)
     if cmd == "skill":
+        from importlib import resources
         print(resources.files("zen_harness").joinpath("SKILL.md").read_text(), end="")
         return 0
     if cmd == "notes":
@@ -164,6 +167,7 @@ def main():
             return 0
         print("zen-harness: --force ends whatever remote-control session Zen has open, "
               "even another tool's.", file=sys.stderr)
+        from . import daemon
         try:
             print(daemon.force_end_session(cfg))
         except daemon.BiDiError as e:
@@ -173,6 +177,7 @@ def main():
     if cmd == "relaunch":
         if ipc.daemon_alive(cfg):
             ipc.send(cfg, {"meta": "stop"})
+        from . import connection
         try:
             print(f"Zen is listening at {connection.relaunch(cfg)}")
         except connection.ConnectError as e:

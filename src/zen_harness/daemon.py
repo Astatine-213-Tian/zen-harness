@@ -23,7 +23,8 @@ from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from . import config, connection, marionette, marker, settle
+from . import config, connection, marionette, marker, runfiles, settle
+from .ipc import err_path
 
 CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
 EVENTS = [
@@ -39,15 +40,6 @@ EVENTS = [
 # Calls that only complete once a dialog they opened is answered.
 BLOCKED_BY_DIALOG = ("input.performActions", "script.evaluate", "script.callFunction",
                      "browsingContext.navigate", "browsingContext.reload")
-
-
-def sock_path(cfg):
-    # Unix socket paths are capped at 104 bytes on macOS, so keep them out of the workspace.
-    return Path(f"/tmp/zen-harness-{os.getuid()}") / f"{cfg.port}.sock"
-
-
-def err_path(cfg):
-    return cfg.run_dir / f"zh-{cfg.port}.err"
 
 
 def open_session(cfg):
@@ -368,9 +360,7 @@ class Session:
 
 
 def bind(cfg):
-    path = sock_path(cfg)
-    path.parent.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(path.parent, 0o700)
+    path = runfiles.daemon_socket(cfg)
     path.unlink(missing_ok=True)
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(path))
@@ -381,7 +371,7 @@ def bind(cfg):
 
 
 def serve(cfg, session, server):
-    path = sock_path(cfg)
+    path = runfiles.daemon_socket(cfg)
     inode = path.stat().st_ino
 
     def unlink_own():
@@ -448,8 +438,6 @@ def serve(cfg, session, server):
 
 def main():
     cfg = config.load()
-    cfg.run_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(cfg.run_dir, 0o700)
     err_path(cfg).unlink(missing_ok=True)
     session = None
     try:

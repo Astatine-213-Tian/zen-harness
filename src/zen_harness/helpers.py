@@ -15,7 +15,6 @@ import struct
 import subprocess
 import sys
 import time
-import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -858,6 +857,7 @@ def http_get(url, headers=None, timeout=20.0):
     """Plain HTTP GET without the browser, for public pages and APIs."""
     h = {"User-Agent": "Mozilla/5.0", "Accept-Encoding": "gzip"}
     h.update(headers or {})
+    import urllib.request  # loaded only here: most snippets never call it
     with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=timeout) as r:
         data = r.read()
         if r.headers.get("Content-Encoding") == "gzip":

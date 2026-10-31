@@ -5,15 +5,19 @@ import subprocess
 import sys
 import time
 
-from .daemon import err_path, sock_path
+from . import runfiles
 
 # Long enough for Zen to start, or for the user to answer the "Allow remote control?" prompt.
 START_TIMEOUT = 90.0
 
 
+def err_path(cfg):
+    return runfiles.run_dir(cfg) / f"zh-{cfg.port}.err"
+
+
 def _connect(cfg):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(str(sock_path(cfg)))
+    s.connect(str(runfiles.daemon_socket(cfg)))
     return s
 
 
@@ -28,10 +32,9 @@ def daemon_alive(cfg) -> bool:
 def ensure_daemon(cfg):
     if daemon_alive(cfg):
         return
-    cfg.run_dir.mkdir(parents=True, exist_ok=True)
     err = err_path(cfg)
     err.unlink(missing_ok=True)
-    log = (cfg.run_dir / f"daemon-{cfg.port}.log").open("ab")
+    log = runfiles.log(cfg, f"daemon-{cfg.port}").open("ab")
     proc = subprocess.Popen([sys.executable, "-m", "zen_harness.daemon"], stdin=subprocess.DEVNULL,
                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     deadline = time.time() + START_TIMEOUT

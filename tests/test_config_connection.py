@@ -72,3 +72,12 @@ def test_instruct_mode_explains_how_to_start(tmp_path):
     cfg = config.Config(port=9399, profile=str(tmp_path), if_not_running="instruct")
     with pytest.raises(connection.ConnectError, match="--remote-debugging-port 9399"):
         connection.connect(cfg)
+
+
+def test_snippets_do_not_load_the_daemon():
+    # Every snippet is a new process; loading websockets and launch code costs ~30 ms each time.
+    import subprocess
+    import sys
+    code = ("import sys, zen_harness.run; print(sorted(m for m in ('websockets', 'zen_harness.daemon', "
+            "'zen_harness.connection', 'urllib.request') if m in sys.modules))")
+    assert subprocess.run([sys.executable, "-c", code], capture_output=True, text=True).stdout.strip() == "[]"
