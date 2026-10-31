@@ -65,8 +65,8 @@ def open_session(cfg):
             "`zen-harness relaunch` to restart Zen (tabs come back through session restore).") from e
 
 
-class BiDiError(RuntimeError):
-    pass
+class BiDiError(ipc.BrowserError):
+    """A BiDi command or session step failed; reaches snippets as BrowserError."""
 
 
 class SessionTaken(BiDiError):
@@ -206,9 +206,7 @@ class Session:
         slot = {"done": threading.Event(), "method": method,
                 "context": p.get("context") or p.get("target", {}).get("context")}
         if method == "input.performActions" and (d := self.pages.dialog(slot["context"])):
-            # Input would wait until the dialog closes; say so instead of hanging.
-            raise BiDiError(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
-                            "answer it with handle_dialog() first")
+            raise ipc.DialogOpen(d)  # input would wait until the dialog closes
         if navigates and slot["context"]:
             self.pages.cause(slot["context"])
         self.pending[msg_id] = slot
@@ -219,7 +217,7 @@ class Session:
             raise TimeoutError(f"{method} got no answer within {timeout:g}s")
         msg = slot["msg"]
         if msg.get("type") == "error":
-            raise BiDiError(f"{msg.get('error')}: {msg.get('message', '')}".strip())
+            raise BiDiError(f"{msg.get('error')}: {msg.get('message', '')}".strip(), msg.get("error"))
         return msg.get("result", {})
 
     def _read(self):
@@ -318,8 +316,11 @@ class Session:
             self.current = req["context"]
             return {"context": self.current}
         if op == "settle":
-            return self.pages.wait(req.get("context") or self.current, bool(req.get("need_load")),
-                                   float(req.get("timeout", 15.0)))
+            r = self.pages.wait(req.get("context") or self.current, bool(req.get("need_load")),
+                                float(req.get("timeout", 15.0)))
+            if r["state"] == "dialog":
+                raise ipc.DialogOpen(r["dialog"])
+            return {"settled": r["state"] == "settled"}
         if op == "dialog":
             return {"dialog": self.pages.dialog(req.get("context") or self.current)}
         if op == "network":
@@ -412,7 +413,7 @@ def serve(cfg, session, server):
                                                    timeout=req.get("timeout", 30.0),
                                                    navigates=bool(req.get("navigates")))}
             except Exception as e:
-                resp = {"error": str(e), "kind": type(e).__name__}
+                resp = ipc.error_reply(e)
             f.write((json.dumps(resp) + "\n").encode())
             f.flush()
             state["last"] = time.monotonic()

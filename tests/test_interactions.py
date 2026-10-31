@@ -458,7 +458,24 @@ def test_input_while_dialog_open_fails_fast(at):
     zh("click('#delete')")
     p = zh("click('#prompt')", check=False)
     assert p.returncode == 1 and "dialog is open" in p.stderr
-    zh("handle_dialog(accept=False)")
+    out = zh("""
+try:
+    click('#prompt')
+except DialogOpen as e:
+    print(e.dialog['type'], isinstance(e, RuntimeError))
+handle_dialog(accept=False)
+""")
+    assert out == "confirm True"
+
+
+def test_browser_errors_carry_the_bidi_code(page):
+    out = page("""
+try:
+    bidi('browsingContext.getTree', root='no-such-tab')
+except BrowserError as e:
+    print(e.code)
+""")
+    assert out == "no such frame"
 
 
 def test_click_on_hidden_element_raises(at):

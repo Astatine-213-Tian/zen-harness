@@ -11,6 +11,47 @@ from . import runfiles
 START_TIMEOUT = 90.0
 
 
+class HarnessError(RuntimeError):
+    """Base of every error the harness raises to snippets."""
+
+
+class BrowserError(HarnessError):
+    """Zen refused a WebDriver BiDi command; `code` is BiDi's error code ("no such frame", ...)."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
+
+class DialogOpen(HarnessError):
+    """A dialog blocks the tab: input would hang and waits would time out. `dialog` is
+    {type, message, defaultValue}; answer it with handle_dialog()."""
+
+    def __init__(self, dialog):
+        hint = " (accept=True leaves the page, accept=False stays)" if dialog["type"] == "beforeunload" else ""
+        super().__init__(f"a {dialog['type']} dialog is open in this tab ({dialog['message']!r}); "
+                         f"answer it with handle_dialog(){hint} first")
+        self.dialog = dialog
+
+
+def error_reply(e) -> dict:
+    """The daemon's reply for an exception; send() raises it again on the client side."""
+    if isinstance(e, DialogOpen):
+        return {"error": str(e), "kind": "dialog_open", "dialog": e.dialog}
+    if isinstance(e, BrowserError):
+        return {"error": str(e), "kind": "browser", "code": e.code}
+    return {"error": str(e), "kind": "harness"}
+
+
+def _raise(resp):
+    kind = resp.get("kind")
+    if kind == "dialog_open":
+        raise DialogOpen(resp["dialog"])
+    if kind == "browser":
+        raise BrowserError(resp["error"], resp.get("code"))
+    raise HarnessError(resp["error"])
+
+
 def _connect(cfg):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(str(runfiles.daemon_socket(cfg)))
@@ -40,16 +81,19 @@ def ensure_daemon(cfg):
     proc.stdout.close()
     if not ready:
         proc.terminate()
-        raise RuntimeError(f"zen-harness daemon did not start within {START_TIMEOUT:.0f}s")
+        raise HarnessError(f"zen-harness daemon did not start within {START_TIMEOUT:.0f}s")
     if not line:
-        raise RuntimeError(f"zen-harness daemon exited at startup; see {log}")
+        raise HarnessError(f"zen-harness daemon exited at startup; see {log}")
     outcome = json.loads(line)
     if "error" in outcome:
-        raise RuntimeError(outcome["error"])
+        raise HarnessError(outcome["error"])
 
 
 def send(cfg, req, timeout=60.0):
-    s = _connect(cfg)
+    try:
+        s = _connect(cfg)
+    except OSError as e:
+        raise HarnessError(f"zen-harness daemon is not running ({e}); run the snippet again") from None
     try:
         s.settimeout(timeout)
         f = s.makefile("rwb")
@@ -59,8 +103,8 @@ def send(cfg, req, timeout=60.0):
     finally:
         s.close()
     if not line:
-        raise RuntimeError("zen-harness daemon closed the connection")
+        raise HarnessError("zen-harness daemon closed the connection")
     resp = json.loads(line)
     if "error" in resp:
-        raise RuntimeError(resp["error"])
+        _raise(resp)
     return resp

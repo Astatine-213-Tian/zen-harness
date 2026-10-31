@@ -20,6 +20,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import config, ipc, marker
+from .ipc import BrowserError, DialogOpen, HarnessError  # noqa: F401 (for snippets)
 
 CFG = config.load()
 INTERNAL = ("about:", "chrome:", "moz-extension:", "resource:", "view-source:")
@@ -57,7 +58,7 @@ def _ctx():
         return ctx
     tab = ensure_real_tab()
     if not tab:
-        raise RuntimeError("no tab to control; call new_tab(url) first")
+        raise HarnessError("no tab to control; call new_tab(url) first")
     return tab["targetId"]
 
 
@@ -106,7 +107,7 @@ def _evaluate(expression, ctx, navigates=False, activate=True):
              serializationOptions={"maxObjectDepth": 20, "maxDomDepth": 0})
     if r.get("type") == "exception":
         d = r.get("exceptionDetails", {})
-        raise RuntimeError(f"JS error: {d.get('text') or _value(d.get('exception', {}))}")
+        raise HarnessError(f"JS error: {d.get('text') or _value(d.get('exception', {}))}")
     return _value(r["result"])
 
 
@@ -152,7 +153,7 @@ def _locate(selector):
     if m:
         ctx = _evaluate(f"window.__zhFrames?.{m[1]}", ctx)
         if not ctx:
-            raise RuntimeError(f"no frame for {selector!r}; take a new snapshot()")
+            raise HarnessError(f"no frame for {selector!r}; take a new snapshot()")
     return ctx, _q(selector)
 
 
@@ -285,7 +286,7 @@ def snapshot(query=None, within=None, limit=150, hrefs=False):
 
 # --- navigation and page ---
 
-class UnsavedChanges(Exception):
+class UnsavedChanges(HarnessError):
     """The page would ask "leave page?" (a beforeunload handler) if navigated away from."""
 
 
@@ -416,7 +417,7 @@ def click(selector, timeout=0.0, leave=False, save_wait=10.0):
     A link to another page is handled like goto_url: unsaved changes get `save_wait` s to
     save, then UnsavedChanges unless leave=True."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
-        raise RuntimeError(f"click: element not found: {selector!r}")
+        raise HarnessError(f"click: element not found: {selector!r}")
     ctx, el = _locate(selector)
     box = js(f"(()=>{{const e={el};if(!e)return null;"
              "e.scrollIntoView({block:'center',inline:'center'});const r=e.getBoundingClientRect();"
@@ -426,9 +427,9 @@ def click(selector, timeout=0.0, leave=False, save_wait=10.0):
              "leaves:!!a&&!(t&&!['_self','_parent','_top'].includes(t))&&!a.hasAttribute('download')&&!/^(javascript|mailto|tel|sms):/i.test(a.href)"
              "&&a.href.split('#')[0]!==location.href.split('#')[0]};})()", target_id=ctx)
     if not box:
-        raise RuntimeError(f"click: element not found: {selector!r}")
+        raise HarnessError(f"click: element not found: {selector!r}")
     if not box["w"] and not box["h"]:
-        raise RuntimeError(f"click: element is not displayed: {selector!r}")
+        raise HarnessError(f"click: element is not displayed: {selector!r}")
     if box["leaves"]:
         _leave_page(ctx, leave, save_wait)
     _click(ctx, box["x"], box["y"], background=box["newTab"])
@@ -472,13 +473,13 @@ def fill_input(selector, text, clear_first=True, timeout=0.0):
     """Fill a framework-managed input (React, Vue, ...): focus, clear, type with real
     key events, then fire input+change so the framework sees the new value."""
     if timeout > 0 and not wait_for_element(selector, timeout=timeout):
-        raise RuntimeError(f"fill_input: element not found: {selector!r}")
+        raise HarnessError(f"fill_input: element not found: {selector!r}")
     ctx, el = _locate(selector)
     if not js(f"(()=>{{const e={el};"
               "if(!e)return false;e.focus();if(e.isContentEditable){const r=document.createRange();"
               "r.selectNodeContents(e);r.collapse(false);getSelection().removeAllRanges();"
               "getSelection().addRange(r);}return true;})()", target_id=ctx):
-        raise RuntimeError(f"fill_input: element not found: {selector!r}")
+        raise HarnessError(f"fill_input: element not found: {selector!r}")
     if clear_first:
         _keys(ctx, _press_actions("a", 4 if sys.platform == "darwin" else 2))
         _keys(ctx, _press_actions("Backspace"))
@@ -518,7 +519,7 @@ def upload_file(selector, path):
     nodes = bidi("browsingContext.locateNodes", context=ctx,
                  locator={"type": "css", "value": _ref_css(selector)}, maxNodeCount=1)["nodes"]
     if not nodes:
-        raise RuntimeError(f"upload_file: no element for {selector!r}")
+        raise HarnessError(f"upload_file: no element for {selector!r}")
     files = [path] if isinstance(path, str) else list(path)
     try:
         bidi("input.setFiles", context=ctx, element={"sharedId": nodes[0]["sharedId"]}, files=files)
@@ -567,7 +568,7 @@ def current_tab():
     for c in _top_contexts():
         if c["context"] == ctx:
             return _tab(ctx, c["url"], _send({"meta": "titles", "contexts": [ctx]})["titles"][ctx])
-    raise RuntimeError("the controlled tab is gone; call ensure_real_tab() or new_tab()")
+    raise HarnessError("the controlled tab is gone; call ensure_real_tab() or new_tab()")
 
 
 def _mark(ctx):
@@ -606,7 +607,7 @@ def _visible(ctx):
 
 def _require_foreground(name):
     if CFG.foreground != "allow":
-        raise RuntimeError(
+        raise HarnessError(
             f"{name} shows a tab or window to the user, which is off (foreground = \"never\"). "
             "Work in the background instead (read data with js()/fetch, page through URLs, scroll()); "
             "if the page truly needs to be visible, ask the user to set foreground = \"allow\" in "
@@ -730,7 +731,7 @@ def new_window(url="about:blank"):
         deadline = time.time() + 10
         while not (new := [c for c in _top_contexts() if c["context"] not in before | {opener}]):
             if time.time() > deadline:
-                raise RuntimeError("new_window: Zen did not open the window")
+                raise HarnessError("new_window: Zen did not open the window")
             time.sleep(0.05)
     finally:
         bidi("browsingContext.close", context=opener)
@@ -788,21 +789,11 @@ def wait(seconds=1.0):
     time.sleep(seconds)
 
 
-class DialogOpen(Exception):
-    """A dialog blocks the tab, so waiting for a page or element would only time out."""
-
-
 def _settle(ctx, need_load, timeout):
     """Wait in the daemon until the tab is settled (GLOSSARY.md). True if settled, False on
     timeout; DialogOpen if a dialog blocks the tab."""
-    r = _send({"meta": "settle", "context": ctx, "need_load": need_load, "timeout": max(0.0, timeout)},
-              timeout=timeout + 15)
-    if r["state"] == "dialog":
-        d = r["dialog"]
-        hint = (" (accept=True leaves the page, accept=False stays)" if d["type"] == "beforeunload" else "")
-        raise DialogOpen(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
-                         f"answer it with handle_dialog(){hint} first")
-    return r["state"] == "settled"
+    return _send({"meta": "settle", "context": ctx, "need_load": need_load, "timeout": max(0.0, timeout)},
+                 timeout=timeout + 15)["settled"]
 
 
 def wait_for_load(timeout=15.0):
@@ -831,6 +822,8 @@ def wait_for_element(selector, timeout=10.0, visible=False):
             if _evaluate(check % el, where):
                 _mark(ctx)  # a new document after a navigation
                 return True
+        except DialogOpen:
+            raise
         except RuntimeError:
             pass  # e.g. the document went away mid-check
         if time.time() >= deadline:
