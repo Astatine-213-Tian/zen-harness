@@ -8,6 +8,7 @@ A CLI that lets coding agents drive the user's real Zen browser over WebDriver B
 uv sync
 uv run pytest -q          # runs snippets against a headless Zen on a throwaway profile
 ZH_TEST_PORT=9361 uv run pytest -q   # pick another port to run suites side by side
+uv run pytest -q tests/test_settle.py   # page settle module, in-process, no Zen needed
 ```
 
 Tests and experiments must never touch the user's running Zen: use throwaway profiles and ports other than 9222.

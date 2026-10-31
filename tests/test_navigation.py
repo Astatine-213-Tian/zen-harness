@@ -107,6 +107,39 @@ handle_dialog(accept=False)
     assert out == "True True"
 
 
+def test_a_dialog_from_a_frame_shows_on_its_tab(at, site):
+    zh = at("frames.html")
+    out = zh(f"""
+f = iframe_target({site + '/frame-inner.html'!r})
+js("setTimeout(() => alert('from frame'), 50)", target_id=f)
+for _ in range(50):
+    if 'dialog' in page_info(): break
+    wait(0.1)
+print(page_info().get('dialog', {{}}).get('message'))
+handle_dialog()
+""")
+    assert out == "from frame"
+
+
+def test_a_click_into_a_frame_that_opens_a_dialog_returns_at_once(at, site):
+    # The click goes to the tab; Zen reports the dialog on the frame.
+    zh = at("frames.html")
+    out = zh(f"""
+import time
+f = iframe_target({site + '/frame-inner.html'!r})
+js("const b = document.createElement('button'); b.id = 'hi'; b.textContent = 'Hi';"
+   "b.onclick = () => alert('hi from frame'); document.body.prepend(b)", target_id=f)
+fx, fy = js("const r = document.getElementById('same').getBoundingClientRect(); [r.left, r.top]")
+bx, by = js("const r = document.getElementById('hi').getBoundingClientRect();"
+            "[r.left + r.width / 2, r.top + r.height / 2]", target_id=f)
+t = time.time()
+click_at_xy(fx + bx, fy + by)
+print(time.time() - t < 5, page_info().get('dialog', {{}}).get('message'))
+handle_dialog()
+""")
+    assert out == "True hi from frame"
+
+
 def test_js_declarations_stay_local_to_each_call(page):
     assert page("print(js('const x = 41; x + 1'))") == "42"
     assert page("print(js('const x = 1; let y = 2; class C {}; x + y'))") == "3"

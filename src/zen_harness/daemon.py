@@ -23,7 +23,7 @@ from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from . import config, connection, marionette, marker
+from . import config, connection, marionette, marker, settle
 
 CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
 EVENTS = [
@@ -36,12 +36,7 @@ EVENTS = [
     "browsingContext.navigationFailed", "browsingContext.fragmentNavigated",
 ]
 
-# Calls that may start a navigation. wait_for_load gives one a moment to begin; reads that
-# can't navigate send params["zh_passive"] = True so they don't count.
-NAVIGATION_CAUSES = ("input.performActions", "script.evaluate", "script.callFunction",
-                     "browsingContext.navigate", "browsingContext.reload", "browsingContext.traverseHistory")
-
-
+# Calls that only complete once a dialog they opened is answered.
 BLOCKED_BY_DIALOG = ("input.performActions", "script.evaluate", "script.callFunction",
                      "browsingContext.navigate", "browsingContext.reload")
 
@@ -191,10 +186,7 @@ class Session:
         self.pending = {}
         self.lock = threading.Lock()
         self.events = collections.deque(maxlen=500)
-        self.dialogs = {}  # context -> prompt params
-        self.navigating = {}  # context -> [id, committed?] of its started, not yet loaded navigation
-        self.last_cause = {}  # context -> monotonic time of the last call that may navigate
-        self.last_nav = {}  # context -> monotonic time its last navigation started
+        self.pages = settle.PageSettle(document_ready=self._document_ready)
         self.inflight = {}  # request id -> context
         self.last_network = {}  # context -> monotonic time of its last network event
         self.started = time.monotonic()
@@ -214,22 +206,18 @@ class Session:
                 marionette.close()
             raise
 
-    def call(self, method, params=None, timeout=30.0):
+    def call(self, method, params=None, timeout=30.0, navigates=False):
+        """navigates=True: the call is a navigation cause (an action, not a read)."""
         msg_id = next(self.ids)
         p = dict(params or {})
-        passive = p.pop("zh_passive", False)
         slot = {"done": threading.Event(), "method": method,
                 "context": p.get("context") or p.get("target", {}).get("context")}
-        if method == "input.performActions" and slot["context"] in self.dialogs:
+        if method == "input.performActions" and (d := self.pages.dialog(slot["context"])):
             # Input would wait until the dialog closes; say so instead of hanging.
-            d = self.dialogs[slot["context"]]
             raise BiDiError(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
                             "answer it with handle_dialog() first")
-        if method in NAVIGATION_CAUSES and not passive and slot["context"]:
-            now = time.monotonic()
-            self.last_cause[slot["context"]] = now
-            if self.current and slot["context"] != self.current:
-                self.last_cause[self.current] = now  # e.g. a click in a frame can navigate the whole tab
+        if navigates and slot["context"]:
+            self.pages.cause(slot["context"])
         self.pending[msg_id] = slot
         with self.lock:
             self.ws.send(json.dumps({"id": msg_id, "method": method, "params": p}))
@@ -260,7 +248,8 @@ class Session:
 
     def _on_event(self, method, p):
         ctx = p.get("context")
-        self._track_navigation(method, ctx, p)
+        if method.startswith("browsingContext."):
+            tab = self.pages.event(method, p)
         if method.startswith("network."):
             req = p.get("request", {})
             self.last_network[ctx] = time.monotonic()
@@ -276,18 +265,17 @@ class Session:
             ctx = p.get("source", {}).get("context")
             summary = {"level": p.get("level"), "text": p.get("text")}
         elif method == "browsingContext.userPromptOpened":
-            self.dialogs[ctx] = {k: p.get(k) for k in ("type", "message", "defaultValue")}
-            summary = self.dialogs[ctx]
+            summary = {k: p.get(k) for k in ("type", "message", "defaultValue")}
             # Input or JS that opened a dialog only completes once the dialog closes; answer it
-            # now so the agent can see the dialog (page_info) and handle it.
+            # now so the agent can see the dialog (page_info) and handle it. A dialog from a frame
+            # releases calls aimed at its tab or any frame in it.
             for msg_id, slot in list(self.pending.items()):
-                if slot["method"] in BLOCKED_BY_DIALOG and slot["context"] == ctx:
+                if slot["method"] in BLOCKED_BY_DIALOG and self.pages.tab_of(slot["context"]) == tab:
                     self.pending.pop(msg_id, None)
                     slot["msg"] = {"type": "success", "result": {
                         "type": "success", "result": {"type": "undefined"}, "dialog": summary}}
                     slot["done"].set()
         elif method == "browsingContext.userPromptClosed":
-            self.dialogs.pop(ctx, None)
             summary = {"accepted": p.get("accepted")}
         elif method == "browsingContext.contextDestroyed":
             if ctx == self.current:
@@ -299,32 +287,13 @@ class Session:
             summary = {"url": p.get("url")}
         self.events.append({"event": method, "context": ctx, "time": time.time(), **summary})
 
-    def _track_navigation(self, method, ctx, p):
-        nav = p.get("navigation")
-        if method == "browsingContext.navigationStarted":
-            # One navigation at a time per tab: a new one supersedes (aborts) the last.
-            self.navigating[ctx] = [nav, False]
-            self.last_nav[ctx] = time.monotonic()
-        elif method == "browsingContext.navigationCommitted":
-            if self.navigating.get(ctx, [None])[0] == nav:
-                self.navigating[ctx][1] = True  # the new document is in place
-        elif method in ("browsingContext.load", "browsingContext.navigationFailed",
-                        "browsingContext.fragmentNavigated", "browsingContext.downloadWillBegin"):
-            if nav is None or self.navigating.get(ctx, [None])[0] == nav:
-                self.navigating.pop(ctx, None)
-        elif method == "browsingContext.userPromptClosed" and p.get("type") == "beforeunload" and not p.get("accepted"):
-            self.navigating.pop(ctx, None)  # the user chose to stay
-        elif method == "browsingContext.contextDestroyed":
-            for d in (self.navigating, self.last_cause, self.last_nav):
-                d.pop(ctx, None)
-
-    def load_state(self, ctx):
-        now = time.monotonic()
-        cause, nav = self.last_cause.get(ctx), self.last_nav.get(ctx)
-        return {"navigating": ctx in self.navigating,
-                "committed": self.navigating.get(ctx, [None, True])[1],
-                "since_cause_ms": None if cause is None else int((now - cause) * 1000),
-                "navigated_since_cause": cause is not None and nav is not None and nav >= cause}
+    def _document_ready(self, tab):
+        try:
+            r = self.call("script.evaluate", {"expression": "document.readyState", "awaitPromise": False,
+                                              "target": {"context": tab}}, timeout=5)
+        except Exception:
+            return False  # mid-navigation
+        return r.get("result", {}).get("value") == "complete"
 
     def titles(self, contexts, timeout=1.5):
         """document.title of each context, queried in parallel; '' if a tab doesn't answer."""
@@ -333,7 +302,7 @@ class Session:
         def one(ctx):
             try:
                 r = self.call("script.evaluate", {"expression": "document.title", "awaitPromise": False,
-                                                  "target": {"context": ctx}, "zh_passive": True},
+                                                  "target": {"context": ctx}},
                               timeout=timeout)
                 out[ctx] = r.get("result", {}).get("value", "")
             except Exception:
@@ -355,11 +324,11 @@ class Session:
         if op == "set_current":
             self.current = req["context"]
             return {"context": self.current}
-        if op == "load_state":
-            ctx = req.get("context") or self.current
-            return {**self.load_state(ctx), "dialog": self.dialogs.get(ctx)}
+        if op == "settle":
+            return self.pages.wait(req.get("context") or self.current, bool(req.get("need_load")),
+                                   float(req.get("timeout", 15.0)))
         if op == "dialog":
-            return {"dialog": self.dialogs.get(req.get("context") or self.current)}
+            return {"dialog": self.pages.dialog(req.get("context") or self.current)}
         if op == "network":
             # Per tab, so long-polling in the user's other tabs never blocks a wait.
             ctx = req.get("context") or self.current
@@ -378,8 +347,8 @@ class Session:
         if tab_marker and self.current:  # don't leave the "controlled" marker on the user's tab
             try:
                 self.call("script.evaluate", {"expression": marker.unmark_js(tab_marker),
-                                              "awaitPromise": False, "target": {"context": self.current},
-                                              "zh_passive": True}, timeout=2)
+                                              "awaitPromise": False, "target": {"context": self.current}},
+                                             timeout=2)
             except Exception:
                 pass
         try:
@@ -449,7 +418,8 @@ def serve(cfg, session, server):
                     resp = session.meta(req)
                 else:
                     resp = {"result": session.call(req["method"], req.get("params"),
-                                                   timeout=req.get("timeout", 30.0))}
+                                                   timeout=req.get("timeout", 30.0),
+                                                   navigates=bool(req.get("navigates")))}
             except Exception as e:
                 resp = {"error": str(e), "kind": type(e).__name__}
             f.write((json.dumps(resp) + "\n").encode())

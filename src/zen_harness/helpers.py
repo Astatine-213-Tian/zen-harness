@@ -30,9 +30,20 @@ def _send(req, timeout=60.0):
     return ipc.send(CFG, req, timeout=timeout)
 
 
+# BiDi methods that can start a navigation; an agent's raw bidi() call to one is a navigation cause.
+_MAY_NAVIGATE = {"input.performActions", "script.evaluate", "script.callFunction", "browsingContext.navigate",
+                 "browsingContext.reload", "browsingContext.traverseHistory", "browsingContext.handleUserPrompt"}
+
+
 def bidi(method, _timeout=30.0, **params):
     """Raw WebDriver BiDi. bidi('browsingContext.getTree'), bidi('script.evaluate', ...)."""
-    return _send({"method": method, "params": params, "timeout": _timeout},
+    return _bidi(method, _timeout, method in _MAY_NAVIGATE, **params)
+
+
+def _bidi(method, _timeout=30.0, _navigates=False, **params):
+    """_navigates=True marks an action that may start a navigation (a navigation cause), so
+    waits watch for one; the harness's own reads leave it False."""
+    return _send({"method": method, "params": params, "timeout": _timeout, "navigates": _navigates},
                  timeout=_timeout + 5).get("result", {})
 
 
@@ -88,11 +99,11 @@ def _value(rv):
     return {"type": t}
 
 
-def _evaluate(expression, ctx, passive=False, activate=True):
-    """passive=True: a read that can't navigate, so wait_for_load needn't watch for one.
-    activate=False: run without giving the page a user activation."""
-    r = bidi("script.evaluate", expression=expression, target={"context": ctx}, awaitPromise=True,
-             resultOwnership="none", userActivation=activate, zh_passive=passive,
+def _evaluate(expression, ctx, navigates=False, activate=True):
+    """Run JS in ctx. navigates=True for an action that may navigate (js() from agents);
+    the harness's own reads leave it False. activate=False: no user activation."""
+    r = _bidi("script.evaluate", _navigates=navigates, expression=expression, target={"context": ctx},
+              awaitPromise=True, resultOwnership="none", userActivation=activate,
              serializationOptions={"maxObjectDepth": 20, "maxDomDepth": 0})
     if r.get("type") == "exception":
         d = r.get("exceptionDetails", {})
@@ -100,7 +111,7 @@ def _evaluate(expression, ctx, passive=False, activate=True):
     return _value(r["result"])
 
 
-def js(expression, target_id=None, _passive=False):
+def js(expression, target_id=None):
     """Run JS in the controlled tab (or an iframe from iframe_target()) and return the value
     of its last statement.
 
@@ -109,10 +120,10 @@ def js(expression, target_id=None, _passive=False):
     or `await` are retried inside an async function; there, only `return` gives a value."""
     ctx = target_id or _ctx()
     try:
-        return _evaluate(f"{{\n{expression}\n}}", ctx, passive=_passive)
+        return _evaluate(f"{{\n{expression}\n}}", ctx, navigates=True)
     except RuntimeError as e:
         if "return not in function" in str(e) or "await is only valid" in str(e):
-            return _evaluate(f"(async () => {{\n{expression}\n}})()", ctx, passive=_passive)
+            return _evaluate(f"(async () => {{\n{expression}\n}})()", ctx, navigates=True)
         raise
 
 
@@ -140,7 +151,7 @@ def _locate(selector):
     ctx = _ctx()
     m = re.fullmatch(r"@(f\d+)e\d+", selector)
     if m:
-        ctx = _evaluate(f"window.__zhFrames?.{m[1]}", ctx, passive=True)
+        ctx = _evaluate(f"window.__zhFrames?.{m[1]}", ctx)
         if not ctx:
             raise RuntimeError(f"no frame for {selector!r}; take a new snapshot()")
     return ctx, _q(selector)
@@ -224,8 +235,8 @@ _SNAPSHOT_JS = r"""
 
 
 def _snapshot_in(ctx, prefix, query, within, limit, hrefs):
-    return js(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},"
-              f"{json.dumps(bool(hrefs))},{json.dumps(prefix)})", target_id=ctx, _passive=True)
+    return _evaluate(f"{_SNAPSHOT_JS}({json.dumps(query)},{json.dumps(within)},{int(limit)},"
+                     f"{json.dumps(bool(hrefs))},{json.dumps(prefix)})", ctx)
 
 
 def _snapshot_line(ref, role, name, extra):
@@ -267,7 +278,7 @@ def snapshot(query=None, within=None, limit=150, hrefs=False):
             url = f["url"] if len(f["url"]) <= 100 else f["url"][:99] + "…"
             lines += [f"# frame {name} {url}"] + [_snapshot_line(*i) for i in f["items"]]
     if frames:
-        _evaluate(f"window.__zhFrames={json.dumps(frames)}", top, passive=True)
+        _evaluate(f"window.__zhFrames={json.dumps(frames)}", top)
     if total > listed:
         lines.append(f"... {total - listed} more; narrow with query= or within=")
     return "\n".join(lines) or "(no interactive elements" + (f" matching {query!r})" if query else ")")
@@ -307,7 +318,7 @@ def _leave_page(ctx, leave=False, save_wait=10.0):
     deadline = time.time() + save_wait
     while not leave:
         try:
-            if not _evaluate(_WANTS_TO_STAY_JS, ctx, passive=True, activate=False):
+            if not _evaluate(_WANTS_TO_STAY_JS, ctx, activate=False):
                 break
         except RuntimeError:
             break  # no document to ask, e.g. an error page
@@ -318,7 +329,7 @@ def _leave_page(ctx, leave=False, save_wait=10.0):
                 "to leave anyway and lose them")
         time.sleep(0.5)
     try:
-        _evaluate(_SKIP_PROMPT_JS, ctx, passive=True, activate=False)
+        _evaluate(_SKIP_PROMPT_JS, ctx, activate=False)
     except RuntimeError:
         pass
 
@@ -351,7 +362,7 @@ def page_info():
         return {"dialog": dialog}
     return _evaluate("({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,"
                      "sy:scrollY,pw:document.documentElement.scrollWidth,"
-                     "ph:document.documentElement.scrollHeight})", ctx, passive=True)
+                     "ph:document.documentElement.scrollHeight})", ctx)
 
 
 def handle_dialog(accept=True, text=None):
@@ -490,7 +501,7 @@ def dispatch_key(selector, key="Enter", event="keypress"):
 def scroll(x, y, dy=-300, dx=0):
     """Scroll whatever is under (x, y). Positive dy scrolls down."""
     ctx = _ctx()
-    if _evaluate("document.visibilityState", ctx, passive=True) == "visible":
+    if _evaluate("document.visibilityState", ctx) == "visible":
         _perform(ctx, {"type": "wheel", "id": "wheel", "actions": [
             {"type": "scroll", "x": round(x), "y": round(y), "deltaX": dx, "deltaY": dy}]})
         return
@@ -563,7 +574,7 @@ def current_tab():
 def _mark(ctx):
     if CFG.tab_marker:
         try:
-            _evaluate(marker.mark_js(CFG.tab_marker), ctx, passive=True, activate=False)
+            _evaluate(marker.mark_js(CFG.tab_marker), ctx, activate=False)
         except Exception:
             pass
 
@@ -571,7 +582,7 @@ def _mark(ctx):
 def _unmark(ctx):
     if CFG.tab_marker and ctx:
         try:
-            _evaluate(marker.unmark_js(CFG.tab_marker), ctx, passive=True, activate=False)
+            _evaluate(marker.unmark_js(CFG.tab_marker), ctx, activate=False)
         except Exception:
             pass
 
@@ -587,8 +598,8 @@ def activate_tab(target):
 def _visible(ctx):
     """True if the tab is the one shown in a window that is on screen."""
     try:
-        r = bidi("script.evaluate", expression="document.visibilityState", awaitPromise=False, zh_passive=True,
-                 target={"context": ctx}, _timeout=1.0)
+        r = _bidi("script.evaluate", 1.0, expression="document.visibilityState", awaitPromise=False,
+                  target={"context": ctx})
     except Exception:
         return False
     return r.get("result", {}).get("value") == "visible"
@@ -660,8 +671,8 @@ def _create_tab():
             windows.setdefault(c.get("clientWindow"), []).append(c["context"])
         for ctxs in windows.values():
             try:  # a popup's own page reports no toolbar; check one page per window
-                popup = bidi("script.evaluate", expression="!window.toolbar.visible", awaitPromise=False,
-                             zh_passive=True, target={"context": ctxs[0]}, _timeout=1.0)["result"].get("value")
+                popup = _bidi("script.evaluate", 1.0, expression="!window.toolbar.visible", awaitPromise=False,
+                              target={"context": ctxs[0]})["result"].get("value")
             except Exception:
                 popup = False
             if not popup:
@@ -778,28 +789,21 @@ def wait(seconds=1.0):
     time.sleep(seconds)
 
 
-# How long after a click/js() a navigation may take to start before we treat the page as staying.
-_NAVIGATION_GRACE_MS = 300
-
-
 class DialogOpen(Exception):
     """A dialog blocks the tab, so waiting for a page or element would only time out."""
 
 
-def _settled(ctx, need_load):
-    """False while the controlled tab is (maybe about to be) navigating away.
-
-    need_load=True waits for the new page's load event; False only for its document
-    to be in place (enough to look for elements). Raises DialogOpen while a dialog is open."""
-    s = _send({"meta": "load_state", "context": ctx})
-    if d := s.get("dialog"):
+def _settle(ctx, need_load, timeout):
+    """Wait in the daemon until the tab is settled (GLOSSARY.md). True if settled, False on
+    timeout; DialogOpen if a dialog blocks the tab."""
+    r = _send({"meta": "settle", "context": ctx, "need_load": need_load, "timeout": max(0.0, timeout)},
+              timeout=timeout + 15)
+    if r["state"] == "dialog":
+        d = r["dialog"]
         hint = (" (accept=True leaves the page, accept=False stays)" if d["type"] == "beforeunload" else "")
         raise DialogOpen(f"a {d['type']} dialog is open in this tab ({d['message']!r}); "
                          f"answer it with handle_dialog(){hint} first")
-    if s["navigating"] and (need_load or not s["committed"]):
-        return False
-    quiet = s["since_cause_ms"] is None or s["since_cause_ms"] >= _NAVIGATION_GRACE_MS
-    return s["navigated_since_cause"] or quiet
+    return r["state"] == "settled"
 
 
 def wait_for_load(timeout=15.0):
@@ -807,16 +811,10 @@ def wait_for_load(timeout=15.0):
     navigates, this waits for the new page rather than returning on the old one.
     Raises DialogOpen at once if a dialog (e.g. "leave page?") blocks the tab."""
     ctx = _ctx()
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            if _settled(ctx, need_load=True) and js("document.readyState", _passive=True) == "complete":
-                _mark(ctx)  # a new document after a click or js() navigation
-                return True
-        except RuntimeError:
-            pass  # mid-navigation
-        time.sleep(0.05)
-    return False
+    if not _settle(ctx, True, timeout):
+        return False
+    _mark(ctx)  # a new document after a click or js() navigation
+    return True
 
 
 def wait_for_element(selector, timeout=10.0, visible=False):
@@ -828,15 +826,16 @@ def wait_for_element(selector, timeout=10.0, visible=False):
                 if visible else "return true;") + "})()")
     ctx = _ctx()
     deadline = time.time() + timeout
-    while time.time() < deadline:
+    while _settle(ctx, False, deadline - time.time()):
         try:
-            if _settled(ctx, need_load=False):
-                where, el = _locate(selector)
-                if js(check % el, target_id=where, _passive=True):
-                    _mark(ctx)  # a new document after a navigation
-                    return True
+            where, el = _locate(selector)
+            if _evaluate(check % el, where):
+                _mark(ctx)  # a new document after a navigation
+                return True
         except RuntimeError:
-            pass
+            pass  # e.g. the document went away mid-check
+        if time.time() >= deadline:
+            break
         time.sleep(0.1)
     return False
 
