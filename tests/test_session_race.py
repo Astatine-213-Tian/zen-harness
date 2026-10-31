@@ -3,11 +3,13 @@ import json
 import subprocess
 import sys
 import threading
+import time
+from pathlib import Path
 
 from websockets.sync.client import connect as ws_connect
 
-from conftest import FIXTURE, PORT
-from zen_harness import config, daemon
+from conftest import FIXTURE, PORT, kill_profile
+from zen_harness import config, connection, daemon
 
 
 def run(env, *args):
@@ -60,3 +62,51 @@ def test_stop_removes_the_tab_marker(zh, env):
     assert zh("print(current_tab()['title'])") == "\U0001F916 Fixture"
     run(env, "stop")
     assert zh(f"print([t['title'] for t in list_tabs() if t['url'] == {url!r}])") == "['Fixture']"
+
+
+def _together(env, n, code="print(len(list_tabs()) > 0)"):
+    """Start n snippets a moment apart: some find no daemon yet, others one still starting."""
+    procs = []
+    for _ in range(n):
+        procs.append(subprocess.Popen([sys.executable, "-m", "zen_harness.run"], stdin=subprocess.PIPE, text=True,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env))
+        time.sleep(0.15)
+    outs = [p.communicate(code, timeout=120) for p in procs]
+    return [p.returncode for p in procs], outs
+
+
+def _daemons():
+    """Every zen-harness daemon process for this test port, parked or still starting included."""
+    out = subprocess.run(["pgrep", "-f", f"zen_harness.daemon --port={PORT}$"], capture_output=True, text=True).stdout
+    return out.split()
+
+
+def _zens(env):
+    out = subprocess.run(["pgrep", "-f", "--", f"--profile {env['ZH_PROFILE']} --remote-debugging-port"],
+                         capture_output=True, text=True).stdout
+    return out.split()
+
+
+def test_snippets_started_together_share_one_daemon(zh, env):
+    for _ in range(6):
+        run(env, "stop")
+        codes, outs = _together(env, 4)
+        assert codes == [0] * 4, outs
+        time.sleep(0.5)
+        # One daemon holds the session; no other is left waiting, parked, or about to fail.
+        assert len(_daemons()) == 1
+
+
+def test_cold_start_together_launches_zen_once(zh, env):
+    for _ in range(3):
+        run(env, "stop")
+        kill_profile(env["ZH_PROFILE"])
+        deadline = time.time() + 15
+        while (connection.listener(int(PORT)) or _zens(env)) and time.time() < deadline:
+            time.sleep(0.2)
+        log = Path(env["ZH_WORKSPACE"]) / "run" / "zen.log"
+        seen = log.stat().st_size if log.exists() else 0
+        codes, outs = _together(env, 3)
+        assert codes == [0] * 3, outs
+        assert len(_zens(env)) == 1
+        assert "already open" not in log.read_text()[seen:]  # a second copy of Zen was started

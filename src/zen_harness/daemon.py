@@ -10,6 +10,7 @@ ends it when the daemon's connection drops, even on `kill -9`. Otherwise it is a
 BiDi-only session that Zen keeps until it restarts if the daemon dies uncleanly.
 """
 import collections
+import fcntl
 import itertools
 import json
 import os
@@ -24,7 +25,7 @@ from pathlib import Path
 from websockets.sync.client import connect as ws_connect
 
 from . import config, connection, marionette, marker, runfiles, settle
-from .ipc import err_path
+from . import ipc
 
 CAPABILITIES = {"unhandledPromptBehavior": {"default": "ignore"}}
 EVENTS = [
@@ -436,22 +437,56 @@ def serve(cfg, session, server):
         session.close(cfg.tab_marker)
 
 
+def take_port_lock(cfg, timeout=ipc.START_TIMEOUT):
+    """The one daemon serving a port holds its lock for life, so simultaneous starts can't launch
+    Zen twice or race for its session. Returns the lock, or None once another daemon serves."""
+    f = runfiles.port_lock(cfg).open("a")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except BlockingIOError:
+            pass
+        if ipc.daemon_alive(cfg):
+            f.close()
+            return None
+        if time.monotonic() > deadline:
+            f.close()
+            raise BiDiError("another zen-harness daemon for this port is still starting or stopping; retry")
+        time.sleep(0.1)
+
+
+def report(outcome):
+    """Tell the client that started us how the start went, then log stdout like stderr."""
+    try:
+        print(json.dumps(outcome), flush=True)
+    except OSError:
+        pass  # the client stopped waiting
+    os.dup2(2, 1)
+
+
 def main():
     cfg = config.load()
-    err_path(cfg).unlink(missing_ok=True)
     session = None
     try:
+        lock = take_port_lock(cfg)
+        if lock is None:
+            report({"served": True})
+            return
         session = open_session(cfg)
         server = bind(cfg)
     except Exception as e:
         msg = str(e) if isinstance(e, (connection.ConnectError, BiDiError)) else traceback.format_exc()
-        err_path(cfg).write_text(msg)
         if session:
             session.close()
+        report({"error": msg})
         taken = e if isinstance(e, SessionTaken) else e.__cause__ if isinstance(e.__cause__, SessionTaken) else None
         if taken:
-            park(cfg, taken.client)  # the error is already reported; keep the other tool's session alive
+            lock.close()  # free the port for the next start, but keep the other tool's session alive
+            park(cfg, taken.client)
         sys.exit(1)
+    report({"ok": True})
     serve(cfg, session, server)
 
 

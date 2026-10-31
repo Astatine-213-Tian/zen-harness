@@ -177,10 +177,11 @@ def main():
     if cmd == "relaunch":
         if ipc.daemon_alive(cfg):
             ipc.send(cfg, {"meta": "stop"})
-        from . import connection
+        from . import connection, daemon
         try:
+            lock = daemon.take_port_lock(cfg)  # noqa: F841 (held until exit: snippets wait for Zen to be back)
             print(f"Zen is listening at {connection.relaunch(cfg)}")
-        except connection.ConnectError as e:
+        except (connection.ConnectError, daemon.BiDiError) as e:
             print(f"zen-harness: {e}", file=sys.stderr)
             return 1
         return 0
