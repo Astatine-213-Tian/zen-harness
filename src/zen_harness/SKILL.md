@@ -5,7 +5,7 @@ description: "Control the user's real Zen browser (tabs, logins, profile) from P
 
 # zen-harness
 
-Drives the user's own Zen browser: their tabs, cookies and logins. Send a Python snippet on stdin; the helpers below are pre-imported and a background daemon keeps the browser session open between calls (~70 ms per call once warm).
+Drives the user's own Zen browser: their tabs, cookies and logins. Send a Python snippet on stdin; the helpers below are pre-imported and a background daemon keeps the browser session open between calls (~40 ms per call once warm).
 
 ```bash
 zen-harness <<'PY'

@@ -2,7 +2,7 @@
 
 **Give Claude Code, Codex or any coding agent hands in the [Zen browser](https://zen-browser.app) you already use: open tabs, click, type, fill forms and read pages, while you stay signed in to everything.**
 
-No separate test browser, no re-logging in, no API keys for each site. The agent runs short Python snippets against your real Zen (Firefox-based), in background tabs, and leaves your own tabs alone. It is fast (~70 ms per call) and cheap on tokens: a whole GitHub page comes back as about 100 lines.
+No separate test browser, no re-logging in, no API keys for each site. The agent runs short Python snippets against your real Zen (Firefox-based), in background tabs, and leaves your own tabs alone. It is fast (~40 ms per call) and cheap on tokens: a whole GitHub page comes back as about 100 lines.
 
 If you know [browser-harness](https://github.com/browser-use/browser-harness): this is **browser-harness for Zen**. Same working style and helper names, rebuilt from scratch on WebDriver BiDi, because Firefox-based browsers don't speak Chrome's DevTools Protocol.
 
@@ -99,6 +99,8 @@ foreground = "never"          # or "allow": let agents show a tab or window (in_
   - Firefox plans to move such sessions into a separate container, which would hide your logins from them.
 - **Automation prefs.** In that mode Firefox also applies ~120 "recommended" automation prefs (e.g. turns off Safe Browsing) while it runs. With `automation_prefs = "skip"` (default), the harness adds `user_pref("remote.prefs.recommended", false);` to the profile's `user.js` when it launches the profile, so your everyday settings stay.
 - **Force-killing the daemon.** When the harness starts Zen it adds `--marionette` and opens the session through Marionette, which Zen ends as soon as the daemon's connection drops, even after `kill -9`. If Zen was started with only `--remote-debugging-port`, the harness falls back to a plain BiDi session, which Zen keeps after its client disappears: the daemon still ends it on errors, idle timeout and SIGTERM/SIGINT/SIGHUP, but after a `kill -9` run `zen-harness relaunch`. `zen-harness doctor` shows which kind is in use.
+- **Your tabs stay yours.** Agents act only on tabs they open (`new_tab`) or pick on purpose (`switch_tab`, or `ensure_real_tab()` for the page you're looking at); with none, helpers raise instead of taking your tab. Each controlled tab carries 🤖 on every page it loads, removed when the session ends.
+- **Several agents at once.** Snippets started together share one daemon. Agents that run in parallel set `ZH_AGENT=<name>` to get a controlled tab each.
 - **Background tabs, nothing in front.** Agents work in background tabs and never switch your tab or bring Zen forward. Clicks, typing and JS work there; wheel scrolling falls back to scrolling the element under the point. Zen throttles hidden tabs, so lazy loading or infinite feeds can stall; agents first get the data another way. The helpers that show the page (`in_front()`, `new_window()`) stay off unless you set `foreground = "allow"`.
 - **Remote Control toggle.** Firefox is adding a built-in "Remote control for AI assistants" toolbar switch that turns this on without restarting (and without `navigator.webdriver`). Zen 1.23.4b ships its backend but not the button yet. zen-harness attaches to it unchanged once it appears.
 
@@ -110,7 +112,7 @@ foreground = "never"          # or "allow": let agents show a tab or window (in_
 | Protocol | Chrome DevTools Protocol | WebDriver BiDi |
 | How agents use it | Python snippets, helpers pre-imported | Same, with the same helper names |
 | Finding elements | Accessibility tree | `snapshot()`: compact list of controls with `@e3` refs |
-| Per call (warm) | ~100–130 ms | ~70 ms |
+| Per call (warm) | ~100–130 ms | ~40 ms |
 | Cloud browsers, recordings | Yes | No (local only, by design) |
 
 ## FAQ
