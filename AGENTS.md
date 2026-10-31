@@ -8,7 +8,6 @@ A CLI that lets coding agents drive the user's real Zen browser over WebDriver B
 uv sync
 uv run pytest -q          # runs snippets against a headless Zen on a throwaway profile
 ZH_TEST_PORT=9361 uv run pytest -q   # pick another port to run suites side by side
-ZH_ZEN_PATH=/Applications/Firefox.app/Contents/MacOS/firefox uv run pytest -q   # run against another Firefox-based browser
 ```
 
 Tests and experiments must never touch the user's running Zen: use throwaway profiles and ports other than 9222.

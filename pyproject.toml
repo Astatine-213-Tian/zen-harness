@@ -1,13 +1,13 @@
 [project]
 name = "zen-harness"
 version = "0.1.0"
-description = "Let AI coding agents (Claude Code, Codex) use your real Zen browser: browser-harness for Zen and Firefox, over WebDriver BiDi."
+description = "Let AI coding agents (Claude Code, Codex) use your real Zen browser: browser-harness for Zen, over WebDriver BiDi."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [{ name = "Teresa Tian" }]
 keywords = [
-  "zen-browser", "firefox", "browser-automation", "ai-agents", "claude-code", "codex",
+  "zen-browser", "browser-automation", "ai-agents", "claude-code", "codex",
   "browser-harness", "webdriver-bidi", "llm", "agentic-browsing",
 ]
 classifiers = [

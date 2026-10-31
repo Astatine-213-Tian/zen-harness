@@ -12,7 +12,6 @@ command -v uv && uv --version
 
 - Not macOS: stop and tell the user zen-harness is macOS-only for now.
 - Zen missing: ask the user to install it from https://zen-browser.app, then continue. If Zen lives elsewhere, note its binary path for step 4 (`zen_path`).
-- The user wants regular Firefox instead of Zen: note `zen_path = "/Applications/Firefox.app/Contents/MacOS/firefox"` and `zen_data_dir = "~/Library/Application Support/Firefox"` for the config file in step 4. Read "Zen" below as Firefox.
 - `uv` missing: ask the user before installing it. With their OK: `brew install uv` (or the official installer at https://docs.astral.sh/uv/).
 
 ## 2. Install the CLI
@@ -73,7 +72,7 @@ Then add `remote_mode = "runtime"` to `~/.config/zen-harness/config.toml`, and r
 
 ### Config file
 
-Only if the user wants a non-default profile or port, runtime mode, or Firefox, also write `~/.config/zen-harness/config.toml`:
+Only if the user wants a non-default profile or port, or runtime mode, also write `~/.config/zen-harness/config.toml`:
 
 ```toml
 profile = "Work"              # profile name from Zen, or a profile folder path

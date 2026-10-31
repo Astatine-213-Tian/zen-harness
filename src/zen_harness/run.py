@@ -102,8 +102,6 @@ def doctor(cfg):
     print(f"Zen processes: {len(procs)}")
     for pid, prof in procs:
         print(f"  pid {pid}: {prof}")
-    app_id = connection.bundle_id(cfg)
-    print(f"relaunch quits: {f'app id {app_id}' if app_id else 'with SIGTERM (no app bundle found for zen_path)'}")
     kind = connection.listener(cfg.port)
     print(f"port {cfg.port}: {({'bidi': 'Zen/Firefox remote control (BiDi)', 'cdp': 'held by a Chromium browser'}).get(kind, 'nothing listening')}")
     if kind == "bidi":

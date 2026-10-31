@@ -4,7 +4,7 @@
 
 No separate test browser, no re-logging in, no API keys for each site. The agent runs short Python snippets against your real Zen (Firefox-based), in background tabs, and leaves your own tabs alone. It is fast (~70 ms per call) and cheap on tokens: a whole GitHub page comes back as about 100 lines.
 
-If you know [browser-harness](https://github.com/browser-use/browser-harness): this is **browser-harness for Zen and Firefox**. Same working style and helper names, rebuilt from scratch on WebDriver BiDi, because Firefox-based browsers don't speak Chrome's DevTools Protocol.
+If you know [browser-harness](https://github.com/browser-use/browser-harness): this is **browser-harness for Zen**. Same working style and helper names, rebuilt from scratch on WebDriver BiDi, because Firefox-based browsers don't speak Chrome's DevTools Protocol.
 
 ```bash
 zen-harness <<'PY'
@@ -64,8 +64,6 @@ Precedence: `ZH_*` env vars > `~/.config/zen-harness/config.toml` > defaults.
 port = 9222
 remote_mode = "flags"         # or "runtime": no restart, websites can't tell (opt-in, see below)
 profile = ""                  # name from profiles.ini, a directory, or "" for Zen's default
-zen_path = "/Applications/Zen.app/Contents/MacOS/zen"
-zen_data_dir = "~/Library/Application Support/zen"  # holds profiles.ini
 if_not_running = "launch"     # or "instruct"
 if_not_listening = "instruct" # or "relaunch"
 automation_prefs = "skip"     # or "apply"
@@ -119,14 +117,7 @@ foreground = "never"          # or "allow": let agents show a tab or window (in_
 
 **Can browser-harness, agent-browser, Playwright MCP or Chrome DevTools MCP control Zen?** Not your running Zen. browser-harness, agent-browser and Chrome DevTools MCP need Chrome's DevTools Protocol, which Firefox removed; Playwright drives its own bundled Firefox build, not your browser and logins. Mozilla's `firefox-devtools-mcp` can attach to Firefox, but as an MCP server (tool definitions every turn, page snapshots in context). zen-harness keeps the low-token "agent writes a short script" style.
 
-**Does it work with regular Firefox?** It is built and tested for Zen, but Firefox speaks the same protocols. Point the harness at Firefox's binary and profile folder:
-
-```toml
-zen_path = "/Applications/Firefox.app/Contents/MacOS/firefox"
-zen_data_dir = "~/Library/Application Support/Firefox"
-```
-
-`relaunch` quits whichever app holds `zen_path` (it reads the bundle id from the app's `Info.plist`), so it never quits Zen when you configure Firefox. The test suite has not been run against Firefox yet (`ZH_ZEN_PATH=/Applications/Firefox.app/Contents/MacOS/firefox uv run pytest -q` does it).
+**Does it work with regular Firefox?** No. zen-harness is built and tested only for Zen, and Firefox isn't supported.
 
 **Is it safe to point at my real browser?** The agent can do anything you can do in that browser, so use it with agents and tasks you trust. It works in tabs it opens, marks the tab it controls with 🤖, and the bundled skill tells agents to stop at passwords, payments and MFA.
 
