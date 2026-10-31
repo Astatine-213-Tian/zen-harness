@@ -7,6 +7,7 @@ import configparser
 import http.client
 import json
 import os
+import plistlib
 import shlex
 import socket
 import subprocess
@@ -15,7 +16,6 @@ from pathlib import Path
 
 from .config import Config
 
-BUNDLE_ID = "app.zen-browser.zen"
 PREF_LINE = 'user_pref("remote.prefs.recommended", false);'
 # Prefs Firefox applies over the profile's when started with --marionette. A busy marionette.port
 # makes Zen quit at startup, so launches ask for `marionette_port` (default 0: any free port).
@@ -181,10 +181,24 @@ def launch(cfg: Config, profile: Path, timeout=30.0) -> str:
     raise ConnectError(f"started Zen but it did not open port {cfg.port} within {timeout:.0f}s; see {log}")
 
 
+def bundle_id(cfg: Config):
+    """Bundle id of the .app holding `zen_path` (app.zen-browser.zen, org.mozilla.firefox, ...), or None."""
+    app = next((p for p in Path(cfg.zen_path).parents if p.suffix == ".app"), None)
+    if app is None:
+        return None
+    try:
+        with open(app / "Contents/Info.plist", "rb") as f:
+            return plistlib.load(f).get("CFBundleIdentifier")
+    except (OSError, plistlib.InvalidFileException):
+        return None
+
+
 def quit_zen(cfg: Config, pid: int, timeout=20.0):
     """Quit gracefully so session restore brings the tabs back."""
-    if len(running_zen(cfg)) == 1:
-        subprocess.run(["osascript", "-e", f'tell application id "{BUNDLE_ID}" to quit'],
+    app_id = bundle_id(cfg)
+    # Quitting by bundle id only reaches the right process when it is the app's only instance.
+    if app_id and len(running_zen(cfg)) == 1:
+        subprocess.run(["osascript", "-e", f'tell application id "{app_id}" to quit'],
                        capture_output=True, timeout=timeout)
     else:
         subprocess.run(["kill", "-TERM", str(pid)])

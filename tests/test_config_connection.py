@@ -1,3 +1,5 @@
+import plistlib
+
 import pytest
 
 from zen_harness import config, connection
@@ -72,3 +74,15 @@ def test_instruct_mode_explains_how_to_start(tmp_path):
     cfg = config.Config(port=9399, profile=str(tmp_path), if_not_running="instruct")
     with pytest.raises(connection.ConnectError, match="--remote-debugging-port 9399"):
         connection.connect(cfg)
+
+
+def test_bundle_id_comes_from_the_app_holding_zen_path(tmp_path):
+    app = tmp_path / "Firefox.app"
+    (app / "Contents/MacOS").mkdir(parents=True)
+    with open(app / "Contents/Info.plist", "wb") as f:
+        plistlib.dump({"CFBundleIdentifier": "org.mozilla.firefox"}, f)
+    assert connection.bundle_id(config.Config(zen_path=str(app / "Contents/MacOS/firefox"))) \
+        == "org.mozilla.firefox"
+    # Outside an .app (or without a readable Info.plist) relaunch falls back to SIGTERM.
+    assert connection.bundle_id(config.Config(zen_path=str(tmp_path / "bin/firefox"))) is None
+    assert connection.bundle_id(config.Config(zen_path=str(tmp_path / "Other.app/Contents/MacOS/x"))) is None
